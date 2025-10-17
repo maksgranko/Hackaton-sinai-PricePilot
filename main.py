@@ -32,7 +32,7 @@ def main():
         "duration_in_seconds": 600,
         "pickup_in_meters": 1000,
         "pickup_in_seconds": 90,
-        "driver_rating": 5,
+        "driver_rating": 2.3,
         "platform": "android",
         "price_start_local": 300,
         "carname": "Toyota",

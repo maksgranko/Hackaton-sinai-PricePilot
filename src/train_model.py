@@ -14,13 +14,15 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-def clean_and_validate_data(df, verbose=True):
+def clean_and_validate_data(df, verbose=True, keep_only_done=False):
     """
     Очищает датасет от физически невозможных и некачественных записей
     
     Args:
         df: Исходный DataFrame
         verbose: Выводить ли статистику
+        keep_only_done: Если True, оставляет только принятые биды (is_done='done')
+                        Если False, оставляет все биды для обучения на конкуренции
         
     Returns:
         pd.DataFrame: Очищенный датасет
@@ -32,7 +34,12 @@ def clean_and_validate_data(df, verbose=True):
         print("\n" + "="*70)
         print("ОЧИСТКА И ВАЛИДАЦИЯ ДАННЫХ")
         print("="*70)
-        print(f"Исходных записей: {initial_count}\n")
+        print(f"Исходных записей: {initial_count}")
+        if keep_only_done:
+            print("Режим: Только принятые биды (done)")
+        else:
+            print("Режим: Все биды (done + cancel) для обучения на конкуренции")
+        print()
     
     # Конвертация временных меток
     df['order_timestamp'] = pd.to_datetime(df['order_timestamp'], errors='coerce')
@@ -62,23 +69,38 @@ def clean_and_validate_data(df, verbose=True):
     problems['zero_duration'] = (df['duration_in_seconds'] <= 0)
     problems['zero_price'] = (df['price_bid_local'] <= 0)
     
-    # 3. Экстремальные значения
+    # 3. НОВОЕ: Минимальные значения для реальных поездок
+    problems['too_short_trip'] = (df['distance_in_meters'] < 500)  # <500 метров
+    problems['too_quick_trip'] = (df['duration_in_seconds'] < 60)  # <1 минуты
+    
+    # 4. Экстремальные значения
     problems['extreme_distance'] = (df['distance_in_meters'] > 100000)  # >100 км
     problems['extreme_duration'] = (df['duration_in_seconds'] > 7200)   # >2 часа
     
-    # 4. Проверка физической возможности скорости
+    # 5. Проверка физической возможности скорости
     problems['too_fast_city'] = (df['avg_speed_kmh'].notna()) & (df['avg_speed_kmh'] > 80)
     min_possible_duration = df['distance_in_meters'] / (120 / 3.6)
     problems['physically_impossible'] = (df['duration_in_seconds'] < min_possible_duration)
     problems['too_slow'] = (df['avg_speed_kmh'].notna()) & (df['avg_speed_kmh'] < 8)
     
-    # 5. Аномалии в подаче
+    # 6. Аномалии в подаче
     problems['extreme_pickup_ratio'] = (df['pickup_ratio'].notna()) & (df['pickup_ratio'] > 5)
     problems['extreme_pickup_speed'] = (df['pickup_speed_kmh'].notna()) & (df['pickup_speed_kmh'] > 100)
     
-    # 6. Ценовые аномалии
+    # 7. Ценовые аномалии
     problems['extreme_markup'] = (df['price_increase_pct'] > 100)
     problems['extreme_price'] = (df['price_bid_local'] > 5000)
+    
+    # 8. НОВОЕ: Точные дубликаты (одинаковые во всём)
+    duplicate_mask = df.duplicated(subset=[
+        'order_id', 'driver_id', 'price_bid_local', 
+        'pickup_in_meters', 'tender_timestamp'
+    ], keep='first')
+    problems['exact_duplicate'] = duplicate_mask
+    
+    # 9. Опционально: оставить только принятые биды
+    if keep_only_done:
+        problems['not_accepted'] = (df['is_done'] != 'done')
     
     # Вывод статистики
     if verbose:
@@ -89,6 +111,8 @@ def clean_and_validate_data(df, verbose=True):
             'zero_distance': 'Нулевое/отрицательное расстояние',
             'zero_duration': 'Нулевая/отрицательная длительность',
             'zero_price': 'Нулевая/отрицательная цена',
+            'too_short_trip': 'Слишком короткая поездка (<500м)',
+            'too_quick_trip': 'Слишком быстрая поездка (<60сек)',
             'extreme_distance': 'Слишком длинная поездка (>100 км)',
             'extreme_duration': 'Слишком долгая поездка (>2 ч)',
             'too_fast_city': 'Слишком высокая скорость (>80 км/ч)',
@@ -97,7 +121,9 @@ def clean_and_validate_data(df, verbose=True):
             'extreme_pickup_ratio': 'Подача >5x длиннее поездки',
             'extreme_pickup_speed': 'Скорость подачи >100 км/ч',
             'extreme_markup': 'Наценка >100%',
-            'extreme_price': 'Цена >5000₽'
+            'extreme_price': 'Цена >5000₽',
+            'exact_duplicate': 'Точный дубликат (все поля совпадают)',
+            'not_accepted': 'Отклонённый бид (is_done=cancel)'
         }
         
         print(f"{'Проблема':<50s} {'Записей':>10s}")
@@ -122,18 +148,25 @@ def clean_and_validate_data(df, verbose=True):
         print(f"{'ИТОГО удалено:':<50s} {delete_mask.sum():>10d} ({delete_mask.sum()/initial_count*100:.1f}%)")
         print(f"{'Осталось записей:':<50s} {len(df_clean):>10d} ({len(df_clean)/initial_count*100:.1f}%)")
         
+        # Статистика по order_id
+        unique_orders = df_clean['order_id'].nunique()
+        avg_bids_per_order = len(df_clean) / unique_orders if unique_orders > 0 else 0
+        print(f"\n{'Уникальных заказов:':<50s} {unique_orders:>10d}")
+        print(f"{'Среднее бидов на заказ:':<50s} {avg_bids_per_order:>10.2f}")
+        
         # Баланс классов
         df_clean['is_done_binary'] = (df_clean['is_done'] == 'done').astype(int)
         done_count = df_clean['is_done_binary'].sum()
         cancel_count = len(df_clean) - done_count
-        done_pct = done_count / len(df_clean) * 100
+        done_pct = done_count / len(df_clean) * 100 if len(df_clean) > 0 else 0
         
         print(f"\n{'Баланс классов:':<50s}")
         print(f"{'  Done':<50s} {done_count:>10d} ({done_pct:5.1f}%)")
         print(f"{'  Cancel':<50s} {cancel_count:>10d} ({100-done_pct:5.1f}%)")
         
-        ratio = cancel_count / done_count
-        print(f"\n{'scale_pos_weight для XGBoost:':<50s} {ratio:>10.2f}")
+        if done_count > 0:
+            ratio = cancel_count / done_count
+            print(f"\n{'scale_pos_weight для XGBoost:':<50s} {ratio:>10.2f}")
         print("="*70)
     
     return df_clean
@@ -360,8 +393,12 @@ def train_model(train_path="simple-train.csv", use_gpu=False, test_size=0.2, ran
     df = pd.read_csv(train_path)
     print(f"   Загружено: {len(df)} записей")
     
-    # 2. КРИТИЧНО: Очистка данных
-    df = clean_and_validate_data(df, verbose=True)
+    # 2. КРИТИЧНО: Очистка данных с НОВЫМИ фильтрами
+    df = clean_and_validate_data(
+        df, 
+        verbose=True,
+        keep_only_done=False  # False = используем все биды для обучения на конкуренции
+    )
     
     if len(df) < 100:
         raise ValueError("⚠️ Слишком мало данных после очистки! Проверьте исходный датасет.")
@@ -392,17 +429,17 @@ def train_model(train_path="simple-train.csv", use_gpu=False, test_size=0.2, ran
     scale_pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
     
     params = {
-        'n_estimators': 300,
+        'n_estimators': 200,  # ⬇️ было 300
         'learning_rate': 0.05,
-        'max_depth': 8,
-        'min_child_weight': 5,
-        'subsample': 0.8,
-        'colsample_bytree': 0.8,
-        'gamma': 0.1,
-        'reg_alpha': 0.1,
-        'reg_lambda': 1.0,
+        'max_depth': 6,  # ⬇️ было 8 (меньше глубина = меньше переобучение)
+        'min_child_weight': 10,  # ⬆️ было 5
+        'subsample': 0.7,  # ⬇️ было 0.8
+        'colsample_bytree': 0.7,  # ⬇️ было 0.8
+        'gamma': 0.2,  # ⬆️ было 0.1
+        'reg_alpha': 0.3,  # ⬆️ было 0.1 (L1 регуляризация)
+        'reg_lambda': 2.0,  # ⬆️ было 1.0 (L2 регуляризация)
         'scale_pos_weight': scale_pos_weight,
-        'tree_method': 'gpu_hist' if use_gpu else 'hist',
+        'tree_method': 'hist',
         'random_state': random_state,
         'eval_metric': 'logloss'
     }
