@@ -1,9 +1,15 @@
+"""
+Модуль рекомендации оптимальной цены бида для водителей Drivee
+Совместим с обновлённой train_model.py (использует те же признаки)
+"""
+
 import pandas as pd
 import numpy as np
 import joblib
 import json
 import os
 from datetime import datetime
+
 
 def detect_taxi_type(carname, carmodel):
     """Определяет тип такси по марке и модели"""
@@ -37,400 +43,377 @@ def detect_taxi_type(carname, carmodel):
     
     return "comfort"
 
-def get_realistic_price_range(dist_km, dur_min, start_price, taxi_type, hour, wday):
-    """
-    Вычисляет реалистичный диапазон цен с адаптивными коэффициентами
-    Без жёстких ограничений на distance/duration/price
-    """
-    
-    # Защита от нулевых/отрицательных значений
-    if dist_km <= 0 or dur_min <= 0 or start_price <= 0:
-        safe_start = max(start_price, 100)
-        return safe_start * 0.8, safe_start * 1.5, safe_start, 1.5
-    
-    # Базовая оценка цены
-    base_price = 100
-    price_per_km = 50
-    price_per_min = 8
-    
-    estimated_price = base_price + dist_km * price_per_km + dur_min * price_per_min
-    estimated_price = max(estimated_price, 100)
-    
-    # Калибровка start_price
-    if abs(start_price - estimated_price) / estimated_price > 0.4:
-        calibrated_start = (start_price + estimated_price) / 2
-    else:
-        calibrated_start = start_price
-    
-    # Временные коэффициенты
-    is_peak = (7 <= hour <= 9) or (15 <= hour <= 17) or (19 <= hour <= 21)
-    is_night = (hour < 6) or (hour >= 22)
-    is_weekend = wday >= 5
-    
-    if is_night:
-        time_coef = 1.25
-    elif is_peak and not is_weekend:
-        time_coef = 1.30
-    elif is_weekend:
-        time_coef = 1.20
-    else:
-        time_coef = 1.15
-    
-    # Тип такси
-    if taxi_type == "business":
-        time_coef *= 1.10
-    elif taxi_type == "economy":
-        time_coef *= 0.95
-    
-    # Расстояние (адаптивно для любых дистанций)
-    if dist_km < 1.0:
-        dist_coef = 0.85
-    elif dist_km < 2.0:
-        dist_coef = 0.95
-    elif dist_km > 20.0:
-        dist_coef = 1.25
-    elif dist_km > 10.0:
-        dist_coef = 1.20
-    elif dist_km > 5.0:
-        dist_coef = 1.10
-    else:
-        dist_coef = 1.0
-    
-    # Время в пути (адаптивно для любой длительности)
-    if dur_min < 5.0:
-        dur_coef = 0.90
-    elif dur_min > 60.0:
-        dur_coef = 1.20
-    elif dur_min > 30.0:
-        dur_coef = 1.15
-    elif dur_min > 15.0:
-        dur_coef = 1.05
-    else:
-        dur_coef = 1.0
-    
-    # Финальный коэффициент (без искусственных ограничений)
-    max_coef = time_coef * dist_coef * dur_coef
-    
-    # Диапазон сканирования
-    min_scan = calibrated_start * 0.85
-    max_scan = calibrated_start * max_coef
-    
-    # Минимальный диапазон
-    if max_scan < min_scan * 1.3:
-        max_scan = min_scan * 1.3
-    
-    return min_scan, max_scan, calibrated_start, max_coef
 
-def build_features_with_order(order_dict, feat_cols):
-    """Строит признаки для одного заказа"""
-    frame = pd.DataFrame([order_dict])
+def build_features_for_price(order_data, price_bid):
+    """
+    Строит признаки для конкретной цены бида
+    ВАЖНО: Должен использовать ТЕ ЖЕ признаки что и в train_model.py!
     
-    if isinstance(frame["order_timestamp"].iloc[0], (int, float)):
-        frame["order_timestamp"] = pd.to_datetime(frame["order_timestamp"], unit='s', errors="coerce")
-    else:
-        frame["order_timestamp"] = pd.to_datetime(frame["order_timestamp"], errors="coerce")
+    Args:
+        order_data: dict с информацией о заказе
+        price_bid: float - тестируемая цена бида
+        
+    Returns:
+        pd.DataFrame с одной строкой признаков
+    """
     
-    ts = frame["order_timestamp"]
+    # Создаём временный DataFrame для единообразия
+    temp_df = pd.DataFrame([{
+        'order_timestamp': order_data['order_timestamp'],
+        'tender_timestamp': order_data.get('tender_timestamp', order_data['order_timestamp']),
+        'driver_reg_date': order_data.get('driver_reg_date', '2020-01-01'),
+        'distance_in_meters': order_data['distance_in_meters'],
+        'duration_in_seconds': order_data['duration_in_seconds'],
+        'pickup_in_meters': order_data['pickup_in_meters'],
+        'pickup_in_seconds': order_data['pickup_in_seconds'],
+        'driver_rating': order_data.get('driver_rating', 5.0),
+        'carname': order_data.get('carname', 'Renault'),
+        'carmodel': order_data.get('carmodel', 'Logan'),
+        'platform': order_data.get('platform', 'android'),
+        'price_start_local': order_data['price_start_local'],
+        'price_bid_local': price_bid  # КРИТИЧНО: варьируемая цена!
+    }])
+    
+    # Конвертация дат
+    ts = pd.to_datetime(temp_df["order_timestamp"], errors="coerce")
     hour = ts.dt.hour.fillna(0)
     wday = ts.dt.weekday.fillna(0)
     
-    is_morning_rush = ((hour >= 7) & (hour <= 9)).astype(int)
-    is_evening_rush = ((hour >= 15) & (hour <= 17)).astype(int)
-    is_night_rush = ((hour >= 19) & (hour <= 21)).astype(int)
-    is_peak_hour = ((is_morning_rush + is_evening_rush + is_night_rush) > 0).astype(float)
-    is_weekend = (wday >= 5).astype(float)
-    is_night = ((hour < 6) | (hour >= 22)).astype(float)
+    features = {}
     
-    dist_km = frame["distance_in_meters"]/1000.0
-    dur_min = frame["duration_in_seconds"]/60.0
-    pickup_km = frame["pickup_in_meters"]/1000.0
-    pickup_min = frame["pickup_in_seconds"]/60.0
-    log_start = np.log1p(frame["price_start_local"])
-    price_per_km = frame["price_start_local"] / (dist_km + 0.1)
+    # ========================================================================
+    # ЦЕНОВЫЕ ПРИЗНАКИ (КРИТИЧНО!)
+    # ========================================================================
+    features['price_bid_local'] = price_bid
+    features['price_start_local'] = order_data['price_start_local']
+    features['price_increase_abs'] = price_bid - order_data['price_start_local']
+    features['price_increase_pct'] = ((price_bid - order_data['price_start_local']) / 
+                                      order_data['price_start_local'] * 100)
+    features['is_price_increased'] = float(features['price_increase_pct'] > 0)
     
-    if "driver_reg_date" in frame.columns and pd.notna(frame["driver_reg_date"].iloc[0]):
-        driver_reg = pd.to_datetime(frame["driver_reg_date"], errors="coerce")
-        days_since_reg = (ts - driver_reg).dt.days.fillna(180)
-        driver_experience_months = days_since_reg / 30.0
-        is_new_driver = (days_since_reg < 30).astype(float)
-    else:
-        driver_experience_months = pd.Series(6.0, index=frame.index)
-        is_new_driver = pd.Series(0.0, index=frame.index)
+    # Нормализованные цены
+    features['price_per_km'] = price_bid / (order_data['distance_in_meters'] / 1000 + 0.1)
+    features['price_per_minute'] = price_bid / (order_data['duration_in_seconds'] / 60 + 0.1)
     
-    if "carname" in frame.columns and "carmodel" in frame.columns:
-        taxi_type = detect_taxi_type(frame["carname"].iloc[0], frame["carmodel"].iloc[0])
-    else:
-        taxi_type = "comfort"
+    # ========================================================================
+    # ВРЕМЕННЫЕ ПРИЗНАКИ
+    # ========================================================================
+    h = hour.iloc[0]
+    w = wday.iloc[0]
     
-    is_economy = 1.0 if taxi_type == "economy" else 0.0
-    is_comfort = 1.0 if taxi_type == "comfort" else 0.0
-    is_business = 1.0 if taxi_type == "business" else 0.0
+    features['hour_sin'] = np.sin(2 * np.pi * h / 24)
+    features['hour_cos'] = np.cos(2 * np.pi * h / 24)
+    features['day_of_week'] = w
+    features['day_sin'] = np.sin(2 * np.pi * w / 7)
+    features['day_cos'] = np.cos(2 * np.pi * w / 7)
+    features['is_weekend'] = float(w >= 5)
     
-    premium_brands = ['Toyota', 'Volkswagen', 'Hyundai', 'Nissan', 'Skoda']
-    if "carname" in frame.columns:
-        is_premium_car = frame["carname"].isin(premium_brands).astype(float)
-    else:
-        is_premium_car = pd.Series(0.0, index=frame.index)
+    # Часы пик
+    is_morning = 1 if 7 <= h <= 9 else 0
+    is_evening = 1 if 17 <= h <= 20 else 0
+    features['is_morning_peak'] = float(is_morning)
+    features['is_evening_peak'] = float(is_evening)
+    features['is_peak_hour'] = float(is_morning or is_evening)
+    features['is_night'] = float(h < 6 or h >= 22)
+    features['is_lunch_time'] = float(12 <= h <= 14)
     
-    is_frequent_user = pd.Series(0.5, index=frame.index)
-    response_time_minutes = pd.Series(1.0, index=frame.index)
-    log_response_time = pd.Series(0.0, index=frame.index)
+    # ========================================================================
+    # ХАРАКТЕРИСТИКИ ПОЕЗДКИ
+    # ========================================================================
+    dist_m = order_data['distance_in_meters']
+    dur_s = order_data['duration_in_seconds']
     
-    hour_normalized = hour / 24.0
-    rating = frame.get("driver_rating", 4.5)
+    features['distance_in_meters'] = dist_m
+    features['duration_in_seconds'] = dur_s
+    features['distance_km'] = dist_m / 1000
+    features['duration_min'] = dur_s / 60
     
-    hour_x_rating = hour_normalized * rating
-    night_x_rating = is_night * rating
-    peak_x_rating_strong = is_peak_hour * rating * 2
+    # Скорость
+    avg_speed = (dist_m / dur_s * 3.6) if dur_s > 0 else 25.0
+    features['avg_speed_kmh'] = avg_speed
+    features['is_traffic_jam'] = float(avg_speed < 15)
+    features['is_highway'] = float(avg_speed > 50)
     
-    hour_x_dist_strong = hour_normalized * dist_km * 10
-    night_x_dist_strong = is_night * dist_km * 5
-    weekend_x_hour = is_weekend * hour_normalized
-    peak_x_dist_strong = is_peak_hour * dist_km * 3
+    # Категории дистанции
+    dist_km = features['distance_km']
+    features['is_short_trip'] = float(dist_km < 2)
+    features['is_medium_trip'] = float(2 <= dist_km < 10)
+    features['is_long_trip'] = float(dist_km >= 10)
     
-    base = pd.DataFrame({
-        "dist_km": dist_km,
-        "dur_min": dur_min,
-        "pickup_km": pickup_km,
-        "pickup_min": pickup_min,
-        "rating": rating,
-        "log_start": log_start,
-        "hour_sin": np.sin(2*np.pi*hour/24.0),
-        "hour_cos": np.cos(2*np.pi*hour/24.0),
-        "wday_sin": np.sin(2*np.pi*wday/7.0),
-        "wday_cos": np.cos(2*np.pi*wday/7.0),
-        "is_peak_hour": is_peak_hour,
-        "is_morning_rush": is_morning_rush.astype(float),
-        "is_evening_rush": is_evening_rush.astype(float),
-        "is_night_rush": is_night_rush.astype(float),
-        "is_weekend": is_weekend,
-        "is_night": is_night,
-        "speed_kmh": dist_km / ((dur_min + 1) / 60.0),
-        "pickup_speed": pickup_km / ((pickup_min + 1) / 60.0),
-        "total_time_min": dur_min + pickup_min,
-        "price_per_km": price_per_km,
-        "price_per_min": frame["price_start_local"] / (dur_min + 0.1),
-        "driver_experience_months": driver_experience_months,
-        "is_new_driver": is_new_driver,
-        "is_premium_car": is_premium_car,
-        "is_economy": is_economy,
-        "is_comfort": is_comfort,
-        "is_business": is_business,
-        "is_frequent_user": is_frequent_user,
-        "response_time_minutes": response_time_minutes,
-        "log_response_time": log_response_time,
-        "rush_x_rating": is_peak_hour * rating,
-        "weekend_x_dist": is_weekend * dist_km,
-        "peak_x_price_per_km": is_peak_hour * price_per_km,
-        "hour_x_weekend": hour * is_weekend / 24.0,
-        "morning_x_dist": is_morning_rush.astype(float) * dist_km,
-        "evening_x_dist": is_evening_rush.astype(float) * dist_km,
-        "night_x_price": is_night * log_start,
-        "night_x_dist": is_night * dist_km,
-        "night_x_price_per_km": is_night * price_per_km,
-        "hour_x_price_per_km": hour * price_per_km / 24.0,
-        "hour_x_dist": hour * dist_km / 24.0,
-        "peak_x_weekend_x_dist": is_peak_hour * is_weekend * dist_km,
-        "peak_x_weekend_x_price": is_peak_hour * is_weekend * log_start,
-        "premium_x_price": is_premium_car * log_start,
-        "experience_x_rating": driver_experience_months * rating,
-        "new_driver_x_price": is_new_driver * log_start,
-        "frequent_user_x_price": is_frequent_user * log_start,
-        "hour_x_rating": hour_x_rating,
-        "night_x_rating": night_x_rating,
-        "peak_x_rating_strong": peak_x_rating_strong,
-        "hour_x_dist_strong": hour_x_dist_strong,
-        "night_x_dist_strong": night_x_dist_strong,
-        "weekend_x_hour": weekend_x_hour,
-        "peak_x_dist_strong": peak_x_dist_strong,
-        "business_x_dist": is_business * dist_km,
-        "business_x_price": is_business * log_start,
-        "economy_x_price": is_economy * log_start,
-    }).fillna(0.0)
+    # ========================================================================
+    # ПОДАЧА ВОДИТЕЛЯ
+    # ========================================================================
+    pickup_m = order_data['pickup_in_meters']
+    pickup_s = order_data['pickup_in_seconds']
     
-    base = base.replace([np.inf, -np.inf], 0)
-    base = base.reindex(columns=feat_cols, fill_value=0.0)
-    return base
-
-def recommend_price(order, output_format="json"):
-    """
-    Рекомендует оптимальные зоны цен с калибровкой и адаптивным диапазоном
+    features['pickup_in_meters'] = pickup_m
+    features['pickup_in_seconds'] = pickup_s
+    features['pickup_km'] = pickup_m / 1000
     
-    Исправлено:
-    - Минимальная фильтрация (только нули)
-    - Калибровка по реальным ценам
-    - Адаптивный диапазон без жёстких лимитов
-    - Последовательные зоны без пробелов
-    - Все 5 зон всегда присутствуют
-    """
+    pickup_speed = (pickup_m / pickup_s * 3.6) if pickup_s > 0 else 20.0
+    features['pickup_speed_kmh'] = pickup_speed
     
-    model_path = "model_enhanced.joblib"
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Модель {model_path} не найдена.")
+    # Соотношения
+    features['pickup_to_trip_ratio'] = pickup_m / (dist_m + 1)
+    features['pickup_time_ratio'] = pickup_s / (dur_s + 1)
+    features['total_distance'] = pickup_m + dist_m
+    features['total_time'] = pickup_s + dur_s
     
-    model_data = joblib.load(model_path)
-    classifier = model_data["model"]
-    feature_columns = model_data["feat_cols"]
+    # ========================================================================
+    # ВОДИТЕЛЬ
+    # ========================================================================
+    features['driver_rating'] = order_data.get('driver_rating', 5.0)
     
-    order_copy = order.copy()
+    # Стаж (если не указан driver_reg_date, предполагаем 1 год стажа)
+    try:
+        driver_reg = pd.to_datetime(order_data.get('driver_reg_date', '2020-01-01'))
+        order_ts = ts.iloc[0]
+        exp_days = (order_ts - driver_reg).days
+        if exp_days < 0:
+            exp_days = 365  # fallback
+    except:
+        exp_days = 365
     
-    if isinstance(order.get("order_timestamp"), (int, float)):
-        current_timestamp = int(order["order_timestamp"])
-        current_dt = datetime.fromtimestamp(current_timestamp)
-    else:
-        current_dt = datetime.strptime(order["order_timestamp"], "%Y-%m-%d %H:%M:%S")
-        current_timestamp = int(current_dt.timestamp())
+    features['driver_experience_days'] = exp_days
+    features['driver_experience_years'] = exp_days / 365.25
+    features['is_new_driver'] = float(exp_days < 30)
+    features['is_experienced_driver'] = float(exp_days > 365)
+    features['has_perfect_rating'] = float(features['driver_rating'] == 5.0)
+    features['rating_deviation'] = 5.0 - features['driver_rating']
     
-    start_price = float(order["price_start_local"])
-    dist_km = order["distance_in_meters"] / 1000.0
-    dur_min = order["duration_in_seconds"] / 60.0
-    hour = current_dt.hour
-    wday = current_dt.weekday()
+    # Время ответа (предполагаем среднее 30 сек)
+    response_time = 30.0
+    features['response_time_seconds'] = response_time
+    features['response_time_log'] = np.log1p(response_time)
+    features['is_fast_response'] = float(response_time < 10)
+    features['is_slow_response'] = float(response_time > 60)
     
-    # Определяем тип такси
-    taxi_type = "comfort"
-    if "taxi_type" in order:
-        taxi_type = order["taxi_type"]
-    elif "carname" in order and "carmodel" in order:
-        taxi_type = detect_taxi_type(order["carname"], order.get("carmodel", ""))
-    
-    # Калибровка: реалистичный диапазон
-    min_scan, max_scan, calibrated_start, max_coef = get_realistic_price_range(
-        dist_km, dur_min, start_price, taxi_type, hour, wday
+    # ========================================================================
+    # АВТОМОБИЛЬ
+    # ========================================================================
+    taxi_type = detect_taxi_type(
+        order_data.get('carname', 'Renault'),
+        order_data.get('carmodel', 'Logan')
     )
     
-    # Сканируем диапазон
-    price_candidates = np.linspace(min_scan, max_scan, 250)
+    features['taxi_type_economy'] = float(taxi_type == 'economy')
+    features['taxi_type_comfort'] = float(taxi_type == 'comfort')
+    features['taxi_type_business'] = float(taxi_type == 'business')
     
-    price_results = []
-    for candidate_price in price_candidates:
-        order_copy["price_start_local"] = candidate_price
-        X_candidate = build_features_with_order(order_copy, feature_columns)
-        prob_done = classifier.predict_proba(X_candidate)[0, 1]
-        expected_value = candidate_price * prob_done
+    # Платформа
+    platform = order_data.get('platform', 'android')
+    features['platform_android'] = float(platform == 'android')
+    features['platform_ios'] = float(platform == 'ios')
+    
+    # ========================================================================
+    # ВЗАИМОДЕЙСТВИЯ ПРИЗНАКОВ
+    # ========================================================================
+    features['price_inc_x_distance'] = features['price_increase_pct'] * features['distance_km']
+    features['price_inc_x_night'] = features['price_increase_pct'] * features['is_night']
+    features['price_inc_x_peak'] = features['price_increase_pct'] * features['is_peak_hour']
+    features['price_inc_x_weekend'] = features['price_increase_pct'] * features['is_weekend']
+    
+    features['distance_x_night'] = features['distance_km'] * features['is_night']
+    features['distance_x_weekend'] = features['distance_km'] * features['is_weekend']
+    features['distance_x_peak'] = features['distance_km'] * features['is_peak_hour']
+    
+    features['speed_x_peak'] = features['avg_speed_kmh'] * features['is_peak_hour']
+    features['rating_x_price_inc'] = features['driver_rating'] * features['price_increase_pct']
+    features['experience_x_price_inc'] = features['driver_experience_years'] * features['price_increase_pct']
+    
+    # Преобразуем в DataFrame
+    result = pd.DataFrame([features])
+    
+    return result
+
+
+def find_optimal_price(order_data, model, num_points=500):
+    """
+    Находит оптимальную цену максимизирующую Expected Revenue
+    
+    Args:
+        order_data: dict с информацией о заказе
+        model: обученная модель
+        num_points: количество точек для сканирования
         
-        price_results.append({
-            "price": float(candidate_price),
-            "probability": float(prob_done),
-            "expected_value": float(expected_value)
-        })
+    Returns:
+        dict с результатами оптимизации
+    """
+    
+    start_price = order_data['price_start_local']
+    
+    # Диапазон сканирования: от 70% до 160% начальной цены
+    min_price = max(start_price * 0.7, 100)  # минимум 100₽
+    max_price = start_price * 1.6
+    
+    # Генерируем цены для тестирования
+    prices = np.linspace(min_price, max_price, num_points)
+    
+    probabilities = []
+    expected_revenues = []
+    
+    # Сканируем каждую цену
+    for price in prices:
+        # Строим признаки для данной цены
+        features = build_features_for_price(order_data, price)
+        
+        # Предсказываем вероятность
+        prob = model.predict_proba(features)[0, 1]
+        
+        # Ожидаемый доход = цена × вероятность
+        expected_revenue = price * prob
+        
+        probabilities.append(prob)
+        expected_revenues.append(expected_revenue)
     
     # Находим оптимум
-    optimal_result = max(price_results, key=lambda x: x["expected_value"])
-    optimal_price = optimal_result["price"]
-    optimal_prob = optimal_result["probability"]
-    optimal_ev = optimal_result["expected_value"]
+    probabilities = np.array(probabilities)
+    expected_revenues = np.array(expected_revenues)
     
-    # Если оптимум на краю, небольшое расширение
-    if optimal_price >= max_scan * 0.95:
-        new_max_scan = min(optimal_price * 1.20, max_scan * 1.15)
-        extended_candidates = np.linspace(max_scan, new_max_scan, 50)
+    best_idx = np.argmax(expected_revenues)
+    optimal_price = prices[best_idx]
+    optimal_prob = probabilities[best_idx]
+    optimal_revenue = expected_revenues[best_idx]
+    
+    # Создаём 5 ценовых зон
+    zones = []
+    zone_colors = ['green', 'yellow-green', 'yellow', 'orange', 'red']
+    zone_names = ['Высокая вероятность', 'Хорошая цена', 'Средняя', 'Рискованная', 'Низкая вероятность']
+    
+    # Разбиваем на 5 зон по вероятности
+    prob_quantiles = np.percentile(probabilities, [20, 40, 60, 80])
+    
+    for i, (color, name) in enumerate(zip(zone_colors, zone_names)):
+        if i == 0:
+            mask = probabilities >= prob_quantiles[3]
+        elif i == 1:
+            mask = (probabilities >= prob_quantiles[2]) & (probabilities < prob_quantiles[3])
+        elif i == 2:
+            mask = (probabilities >= prob_quantiles[1]) & (probabilities < prob_quantiles[2])
+        elif i == 3:
+            mask = (probabilities >= prob_quantiles[0]) & (probabilities < prob_quantiles[1])
+        else:
+            mask = probabilities < prob_quantiles[0]
         
-        for candidate_price in extended_candidates:
-            order_copy["price_start_local"] = candidate_price
-            X_candidate = build_features_with_order(order_copy, feature_columns)
-            prob_done = classifier.predict_proba(X_candidate)[0, 1]
-            expected_value = candidate_price * prob_done
-            
-            price_results.append({
-                "price": float(candidate_price),
-                "probability": float(prob_done),
-                "expected_value": float(expected_value)
+        zone_prices = prices[mask]
+        zone_probs = probabilities[mask]
+        
+        if len(zone_prices) > 0:
+            zones.append({
+                'color': color,
+                'name': name,
+                'price_from': int(zone_prices.min()),
+                'price_to': int(zone_prices.max()),
+                'avg_probability': float(zone_probs.mean()),
+                'avg_revenue': float((zone_prices * zone_probs).mean())
             })
-        
-        optimal_result = max(price_results, key=lambda x: x["expected_value"])
-        optimal_price = optimal_result["price"]
-        optimal_prob = optimal_result["probability"]
-        optimal_ev = optimal_result["expected_value"]
-        max_scan = new_max_scan
-    
-    max_prob = max(r["probability"] for r in price_results)
-    max_prob_result = max(price_results, key=lambda x: x["probability"])
-    
-    # Зоны относительно optimal_price
-    zone_config = [
-        {"zone_id": 1, "zone_name": "zone_1_red_low", 
-         "price_range": (min_scan, optimal_price * 0.75)},
-        
-        {"zone_id": 2, "zone_name": "zone_2_yellow_low", 
-         "price_range": (optimal_price * 0.75, optimal_price * 0.90)},
-        
-        {"zone_id": 3, "zone_name": "zone_3_green", 
-         "price_range": (optimal_price * 0.90, optimal_price * 1.10)},
-        
-        {"zone_id": 4, "zone_name": "zone_4_yellow_high", 
-         "price_range": (optimal_price * 1.10, optimal_price * 1.30)},
-        
-        {"zone_id": 5, "zone_name": "zone_5_red_high", 
-         "price_range": (optimal_price * 1.30, max_scan)}
-    ]
-    
-    zones_data = []
-    previous_max = None
-    
-    for zone in zone_config:
-        min_price_zone, max_price_zone = zone["price_range"]
-        
-        # Без пробелов!
-        if previous_max is not None:
-            min_price_zone = previous_max
-        
-        zone_prices = [r for r in price_results 
-                      if min_price_zone <= r["price"] <= max_price_zone]
-        
-        if not zone_prices:
-            continue
-        
-        avg_prob = np.mean([r["probability"] for r in zone_prices])
-        avg_ev = np.mean([r["expected_value"] for r in zone_prices])
-        
-        zones_data.append({
-            "zone_id": zone["zone_id"],
-            "zone_name": zone["zone_name"],
-            "price_range": {
-                "min": round(min_price_zone, 2),
-                "max": round(max_price_zone, 2)
-            },
-            "metrics": {
-                "avg_probability_percent": round(avg_prob * 100, 2),
-                "avg_normalized_probability_percent": round((avg_prob / max_prob) * 100, 2),
-                "avg_expected_value": round(avg_ev, 2)
-            }
-        })
-        
-        previous_max = max_price_zone
-    
-    optimal_zone_id = 3
-    for zone in zones_data:
-        if zone["price_range"]["min"] <= optimal_price <= zone["price_range"]["max"]:
-            optimal_zone_id = zone["zone_id"]
-            break
     
     result = {
-        "taxi_type": taxi_type,
-        "zones": zones_data,
-        "optimal_price": {
-            "price": round(optimal_price, 2),
-            "probability_percent": round(optimal_prob * 100, 2),
-            "normalized_probability_percent": round((optimal_prob / max_prob) * 100, 2),
-            "expected_value": round(optimal_ev, 2),
-            "zone_id": optimal_zone_id
-        },
-        "analysis": {
-            "start_price": round(start_price, 2),
-            "calibrated_start": round(calibrated_start, 2),
-            "max_coef": round(max_coef, 2),
-            "max_probability_percent": round(max_prob * 100, 2),
-            "max_probability_price": round(max_prob_result["price"], 2),
-            "scan_range": {
-                "min": round(min_scan, 2),
-                "max": round(max_scan, 2)
-            },
-            "timestamp": current_timestamp
+        'optimal_price': int(optimal_price),
+        'optimal_probability': float(optimal_prob),
+        'expected_revenue': float(optimal_revenue),
+        'start_price': int(start_price),
+        'price_increase_pct': float((optimal_price - start_price) / start_price * 100),
+        'zones': zones,
+        'scan_stats': {
+            'prices_tested': int(num_points),
+            'min_price': float(min_price),
+            'max_price': float(max_price),
+            'avg_probability': float(probabilities.mean()),
+            'max_probability': float(probabilities.max())
         }
     }
     
-    if output_format == "json":
-        return json.dumps(result, ensure_ascii=False, indent=2)
+    return result
+
+
+def recommend_price(order_data, output_json=True, model_path="model_enhanced.joblib"):
+    """
+    Главная функция рекомендации цены
+    """
+    
+    # Загрузка модели
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"⚠️ Модель не найдена: {model_path}")
+    
+    model = joblib.load(model_path)
+    
+    # ОТЛАДКА: Проверяем что загрузили
+    print(f"  Тип загруженного объекта: {type(model)}")
+    if hasattr(model, 'predict_proba'):
+        print(f"  ✓ Модель имеет метод predict_proba")
     else:
-        return result
+        print(f"  ✗ ОШИБКА: Объект не имеет predict_proba!")
+        print(f"  Содержимое: {model}")
+        raise TypeError(f"Загружен неправильный объект: {type(model)}")
+    
+    # Валидация входных данных
+    required_fields = [
+        'order_timestamp', 'distance_in_meters', 'duration_in_seconds',
+        'pickup_in_meters', 'pickup_in_seconds', 'price_start_local'
+    ]
+    
+    for field in required_fields:
+        if field not in order_data:
+            raise ValueError(f"⚠️ Отсутствует обязательное поле: {field}")
+    
+    # Поиск оптимальной цены
+    result = find_optimal_price(order_data, model, num_points=500)
+    
+    if output_json:
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    
+    return result
+
+
+if __name__ == "__main__":
+    # Пример использования
+    
+    print("\n" + "="*70)
+    print("ТЕСТ СИСТЕМЫ РЕКОМЕНДАЦИИ ЦЕН")
+    print("="*70)
+    
+    # Проверяем наличие модели
+    if not os.path.exists("model_enhanced.joblib"):
+        print("\n⚠️ Модель не найдена! Сначала запустите train_model.py")
+        exit(1)
+    
+    # Тестовый заказ
+    test_order = {
+        "order_timestamp": int(datetime.now().timestamp()),
+        "distance_in_meters": 5000,
+        "duration_in_seconds": 900,
+        "pickup_in_meters": 1500,
+        "pickup_in_seconds": 200,
+        "driver_rating": 4.9,
+        "platform": "android",
+        "price_start_local": 250,
+        "carname": "Toyota",
+        "carmodel": "Camry",
+        "driver_reg_date": "2020-01-15"
+    }
+    
+    print("\nТестовый заказ:")
+    print(f"  Дистанция: {test_order['distance_in_meters']/1000:.1f} км")
+    print(f"  Время в пути: {test_order['duration_in_seconds']/60:.1f} мин")
+    print(f"  Начальная цена: {test_order['price_start_local']}₽")
+    print(f"  Автомобиль: {test_order['carname']} {test_order['carmodel']}")
+    
+    print("\nПоиск оптимальной цены...")
+    result = recommend_price(test_order, output_json=False)
+    
+    print("\n" + "="*70)
+    print("РЕЗУЛЬТАТЫ")
+    print("="*70)
+    print(f"\n✅ Рекомендованная цена: {result['optimal_price']}₽")
+    print(f"   Вероятность принятия: {result['optimal_probability']*100:.1f}%")
+    print(f"   Ожидаемый доход: {result['expected_revenue']:.2f}₽")
+    print(f"   Наценка к начальной цене: {result['price_increase_pct']:+.1f}%")
+    
+    print("\nЦеновые зоны:")
+    for zone in result['zones']:
+        print(f"  {zone['name']:25s} [{zone['color']:12s}] "
+              f"{zone['price_from']:4d}-{zone['price_to']:4d}₽ "
+              f"(вероятность: {zone['avg_probability']*100:4.1f}%)")
+    
+    print("\n" + "="*70)
