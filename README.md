@@ -43,6 +43,26 @@ You can tweak behaviour with environment variables before starting the app:
 
 If you expose the UI from a different origin, remember to allow it via `BACKEND_ALLOW_ORIGINS`, e.g. `BACKEND_ALLOW_ORIGINS="http://127.0.0.1:3000"`.
 
+## ML Integration
+
+By default the backend returns a mocked response. To plug in the bundled Python model (`src/recommend_price.py`) or your own implementation:
+
+- `PRICING_ML_MODULE` – dotted path to the module containing the entrypoint (e.g. `src.recommend_price`)
+- `PRICING_ML_CALLABLE` – callable inside that module (sync or async) that accepts `OrderRequest`/dict and returns a payload compatible with `ModelResponse` (default for bundled module: `predict`)
+- `PRICING_MODEL_PATH` – override path to the serialized model artifact (defaults to `model_enhanced.joblib`)
+- `PRICING_ML_ALLOW_STUB_FALLBACK` – set to `false` to disable fallback to the dummy payload when import/execution fails
+- `PRICING_SCAN_POINTS` – number of price points to scan when building the curve (defaults to 200)
+
+Example configuration for the bundled pipeline:
+
+```bash
+export PRICING_ML_MODULE=src.recommend_price
+export PRICING_ML_CALLABLE=predict
+export PRICING_MODEL_PATH=model_enhanced.joblib
+```
+
+When both `PRICING_ML_MODULE` and `PRICING_ML_CALLABLE` are present the app will load and cache that callable; otherwise the stub remains active.
+
 ## API
 
 - `POST /api/v1/orders/price-recommendation`  
@@ -76,4 +96,4 @@ The script requests a JWT using the demo credentials (override with `API_USERNAM
 ## Replacing the Stub
 
 - Update `app/services.py` to call the real ML model (HTTP, RPC, etc.).
-- Adjust response parsing in `call_ml_model_stub` if the ML contract changes.
+- Adjust response parsing in `call_pricing_model` if the ML contract changes.

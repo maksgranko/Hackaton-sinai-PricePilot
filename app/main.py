@@ -66,7 +66,7 @@ def create_app() -> FastAPI:
         _current_user: schemas.User = Depends(auth.get_current_user),
     ) -> schemas.ModelResponse:
         try:
-            return await services.call_ml_model_stub(order)
+            return await services.call_pricing_model(order)
         except Exception as exc:  # pragma: no cover - defensive until real integration
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,

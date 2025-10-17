@@ -36,6 +36,9 @@ class Settings:
     webui_username: str = os.getenv("WEBUI_USERNAME", "demo@example.com")
     webui_password: str = os.getenv("WEBUI_PASSWORD", "demo")
     webui_include_credentials: bool = _env_bool("WEBUI_INCLUDE_CREDENTIALS", False)
+    ml_module_path: str = os.getenv("PRICING_ML_MODULE", "").strip()
+    ml_callable_name: str = os.getenv("PRICING_ML_CALLABLE", "").strip()
+    ml_allow_stub_fallback: bool = _env_bool("PRICING_ML_ALLOW_STUB_FALLBACK", True)
 
 
 settings = Settings()

@@ -2,9 +2,19 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
-from typing import Any, Dict
+import importlib
+import inspect
+import logging
+from functools import lru_cache
+from typing import Any, Awaitable, Callable, Dict, Optional, Union
 
 from . import schemas
+from .config import settings
+
+logger = logging.getLogger(__name__)
+
+ModelPayload = Union[schemas.ModelResponse, Dict[str, Any]]
+ModelCallable = Callable[[schemas.OrderRequest], Union[ModelPayload, Awaitable[ModelPayload]]]
 
 DUMMY_RESPONSE: Dict[str, Any] = {
     "price_probabilities": {
@@ -105,13 +115,26 @@ DUMMY_RESPONSE: Dict[str, Any] = {
     },
 }
 
+@lru_cache(maxsize=1)
+def _load_ml_callable() -> Optional[ModelCallable]:
+    module_path = settings.ml_module_path
+    callable_name = settings.ml_callable_name
 
-async def call_ml_model_stub(order: schemas.OrderRequest) -> schemas.ModelResponse:
-    """
-    Fake async call to ML model endpoint.
-    Replace with real HTTP call or RPC integration once the model is ready.
-    """
-    # Update timestamp to current time to show request context.
+    if not module_path or not callable_name:
+        return None
+
+    module = importlib.import_module(module_path)
+    handler = getattr(module, callable_name, None)
+    if handler is None:
+        raise AttributeError(f"Callable '{callable_name}' not found in module '{module_path}'")
+    if not callable(handler):
+        raise TypeError(f"Attribute '{callable_name}' in '{module_path}' is not callable")
+
+    logger.info("Loaded ML handler %s.%s", module_path, callable_name)
+    return handler  # type: ignore[return-value]
+
+
+def _build_stub_response(order: schemas.OrderRequest) -> schemas.ModelResponse:
     response_copy = deepcopy(DUMMY_RESPONSE)
     analysis = response_copy["analysis"]
     analysis["timestamp"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
@@ -120,5 +143,42 @@ async def call_ml_model_stub(order: schemas.OrderRequest) -> schemas.ModelRespon
         order.price_start_local,
         analysis["scan_range"]["max"],
     )
-
     return schemas.ModelResponse(**response_copy)
+
+
+def _coerce_model_response(result: ModelPayload) -> schemas.ModelResponse:
+    if isinstance(result, schemas.ModelResponse):
+        return result
+    if isinstance(result, dict):
+        return schemas.ModelResponse(**result)
+    raise TypeError(
+        "ML handler must return schemas.ModelResponse or dict compatible payload; "
+        f"received {type(result)!r}"
+    )
+
+
+async def call_pricing_model(order: schemas.OrderRequest) -> schemas.ModelResponse:
+    """
+    Call real ML module if configured, otherwise return stub response.
+    """
+    try:
+        handler = _load_ml_callable()
+    except Exception as exc:
+        if settings.ml_allow_stub_fallback:
+            logger.warning("Failed to load ML handler, falling back to stub: %s", exc)
+            return _build_stub_response(order)
+        raise
+
+    if handler is None:
+        return _build_stub_response(order)
+
+    try:
+        result = handler(order)
+        if inspect.isawaitable(result):
+            result = await result  # type: ignore[assignment]
+        return _coerce_model_response(result)
+    except Exception as exc:
+        if settings.ml_allow_stub_fallback:
+            logger.error("ML handler failed, falling back to stub: %s", exc, exc_info=True)
+            return _build_stub_response(order)
+        raise
