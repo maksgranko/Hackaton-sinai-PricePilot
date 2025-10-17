@@ -37,6 +37,90 @@ def detect_taxi_type(carname, carmodel):
     
     return "comfort"
 
+def get_realistic_price_range(dist_km, dur_min, start_price, taxi_type, hour, wday):
+    """
+    Вычисляет реалистичный диапазон цен с адаптивными коэффициентами
+    Без жёстких ограничений на distance/duration/price
+    """
+    
+    # Защита от нулевых/отрицательных значений
+    if dist_km <= 0 or dur_min <= 0 or start_price <= 0:
+        safe_start = max(start_price, 100)
+        return safe_start * 0.8, safe_start * 1.5, safe_start, 1.5
+    
+    # Базовая оценка цены
+    base_price = 100
+    price_per_km = 50
+    price_per_min = 8
+    
+    estimated_price = base_price + dist_km * price_per_km + dur_min * price_per_min
+    estimated_price = max(estimated_price, 100)
+    
+    # Калибровка start_price
+    if abs(start_price - estimated_price) / estimated_price > 0.4:
+        calibrated_start = (start_price + estimated_price) / 2
+    else:
+        calibrated_start = start_price
+    
+    # Временные коэффициенты
+    is_peak = (7 <= hour <= 9) or (15 <= hour <= 17) or (19 <= hour <= 21)
+    is_night = (hour < 6) or (hour >= 22)
+    is_weekend = wday >= 5
+    
+    if is_night:
+        time_coef = 1.25
+    elif is_peak and not is_weekend:
+        time_coef = 1.30
+    elif is_weekend:
+        time_coef = 1.20
+    else:
+        time_coef = 1.15
+    
+    # Тип такси
+    if taxi_type == "business":
+        time_coef *= 1.10
+    elif taxi_type == "economy":
+        time_coef *= 0.95
+    
+    # Расстояние (адаптивно для любых дистанций)
+    if dist_km < 1.0:
+        dist_coef = 0.85
+    elif dist_km < 2.0:
+        dist_coef = 0.95
+    elif dist_km > 20.0:
+        dist_coef = 1.25
+    elif dist_km > 10.0:
+        dist_coef = 1.20
+    elif dist_km > 5.0:
+        dist_coef = 1.10
+    else:
+        dist_coef = 1.0
+    
+    # Время в пути (адаптивно для любой длительности)
+    if dur_min < 5.0:
+        dur_coef = 0.90
+    elif dur_min > 60.0:
+        dur_coef = 1.20
+    elif dur_min > 30.0:
+        dur_coef = 1.15
+    elif dur_min > 15.0:
+        dur_coef = 1.05
+    else:
+        dur_coef = 1.0
+    
+    # Финальный коэффициент (без искусственных ограничений)
+    max_coef = time_coef * dist_coef * dur_coef
+    
+    # Диапазон сканирования
+    min_scan = calibrated_start * 0.85
+    max_scan = calibrated_start * max_coef
+    
+    # Минимальный диапазон
+    if max_scan < min_scan * 1.3:
+        max_scan = min_scan * 1.3
+    
+    return min_scan, max_scan, calibrated_start, max_coef
+
 def build_features_with_order(order_dict, feat_cols):
     """Строит признаки для одного заказа"""
     frame = pd.DataFrame([order_dict])
@@ -73,7 +157,6 @@ def build_features_with_order(order_dict, feat_cols):
         driver_experience_months = pd.Series(6.0, index=frame.index)
         is_new_driver = pd.Series(0.0, index=frame.index)
     
-    # Определяем тип такси
     if "carname" in frame.columns and "carmodel" in frame.columns:
         taxi_type = detect_taxi_type(frame["carname"].iloc[0], frame["carmodel"].iloc[0])
     else:
@@ -170,7 +253,16 @@ def build_features_with_order(order_dict, feat_cols):
     return base
 
 def recommend_price(order, output_format="json"):
-    """Рекомендует оптимальные зоны цен"""
+    """
+    Рекомендует оптимальные зоны цен с калибровкой и адаптивным диапазоном
+    
+    Исправлено:
+    - Минимальная фильтрация (только нули)
+    - Калибровка по реальным ценам
+    - Адаптивный диапазон без жёстких лимитов
+    - Последовательные зоны без пробелов
+    - Все 5 зон всегда присутствуют
+    """
     
     model_path = "model_enhanced.joblib"
     if not os.path.exists(model_path):
@@ -190,6 +282,10 @@ def recommend_price(order, output_format="json"):
         current_timestamp = int(current_dt.timestamp())
     
     start_price = float(order["price_start_local"])
+    dist_km = order["distance_in_meters"] / 1000.0
+    dur_min = order["duration_in_seconds"] / 60.0
+    hour = current_dt.hour
+    wday = current_dt.weekday()
     
     # Определяем тип такси
     taxi_type = "comfort"
@@ -198,33 +294,13 @@ def recommend_price(order, output_format="json"):
     elif "carname" in order and "carmodel" in order:
         taxi_type = detect_taxi_type(order["carname"], order.get("carmodel", ""))
     
-    hour = current_dt.hour
-    wday = current_dt.weekday()
+    # Калибровка: реалистичный диапазон
+    min_scan, max_scan, calibrated_start, max_coef = get_realistic_price_range(
+        dist_km, dur_min, start_price, taxi_type, hour, wday
+    )
     
-    is_peak = (7 <= hour <= 9) or (15 <= hour <= 17) or (19 <= hour <= 21)
-    is_night = (hour < 6) or (hour >= 22)
-    is_weekend = wday >= 5
-    
-    min_scan = start_price
-    
-    # Коэффициенты с учётом типа такси
-    if is_night:
-        max_coef = 1.70
-    elif is_peak and not is_weekend:
-        max_coef = 1.80
-    elif is_weekend:
-        max_coef = 1.60
-    else:
-        max_coef = 1.50
-    
-    # Корректируем по типу такси
-    if taxi_type == "business":
-        max_coef *= 1.15  # Бизнес: +15%
-    elif taxi_type == "economy":
-        max_coef *= 0.90  # Эконом: -10%
-    
-    max_scan = start_price * max_coef
-    price_candidates = np.linspace(min_scan, max_scan, 200)
+    # Сканируем диапазон
+    price_candidates = np.linspace(min_scan, max_scan, 250)
     
     price_results = []
     for candidate_price in price_candidates:
@@ -239,16 +315,16 @@ def recommend_price(order, output_format="json"):
             "expected_value": float(expected_value)
         })
     
+    # Находим оптимум
     optimal_result = max(price_results, key=lambda x: x["expected_value"])
     optimal_price = optimal_result["price"]
     optimal_prob = optimal_result["probability"]
     optimal_ev = optimal_result["expected_value"]
     
-    # Принудительное расширение для зон 4 и 5
-    required_max = optimal_price * 1.40
-    if max_scan < required_max:
-        max_scan = required_max
-        extended_candidates = np.linspace(optimal_price, max_scan, 100)
+    # Если оптимум на краю, небольшое расширение
+    if optimal_price >= max_scan * 0.95:
+        new_max_scan = min(optimal_price * 1.20, max_scan * 1.15)
+        extended_candidates = np.linspace(max_scan, new_max_scan, 50)
         
         for candidate_price in extended_candidates:
             order_copy["price_start_local"] = candidate_price
@@ -261,11 +337,17 @@ def recommend_price(order, output_format="json"):
                 "probability": float(prob_done),
                 "expected_value": float(expected_value)
             })
+        
+        optimal_result = max(price_results, key=lambda x: x["expected_value"])
+        optimal_price = optimal_result["price"]
+        optimal_prob = optimal_result["probability"]
+        optimal_ev = optimal_result["expected_value"]
+        max_scan = new_max_scan
     
     max_prob = max(r["probability"] for r in price_results)
     max_prob_result = max(price_results, key=lambda x: x["probability"])
     
-     # Зоны относительно optimal_price
+    # Зоны относительно optimal_price
     zone_config = [
         {"zone_id": 1, "zone_name": "zone_1_red_low", 
          "price_range": (min_scan, optimal_price * 0.75)},
@@ -284,12 +366,12 @@ def recommend_price(order, output_format="json"):
     ]
     
     zones_data = []
-    previous_max = None  # Для контроля последовательности
+    previous_max = None
     
     for zone in zone_config:
         min_price_zone, max_price_zone = zone["price_range"]
         
-        # Корректируем min, чтобы не было пробелов
+        # Без пробелов!
         if previous_max is not None:
             min_price_zone = previous_max
         
@@ -302,7 +384,6 @@ def recommend_price(order, output_format="json"):
         avg_prob = np.mean([r["probability"] for r in zone_prices])
         avg_ev = np.mean([r["expected_value"] for r in zone_prices])
         
-        # ИСПОЛЬЗУЕМ ТЕОРЕТИЧЕСКИЕ ГРАНИЦЫ (без пробелов!)
         zones_data.append({
             "zone_id": zone["zone_id"],
             "zone_name": zone["zone_name"],
@@ -317,7 +398,6 @@ def recommend_price(order, output_format="json"):
             }
         })
         
-        # Запоминаем max для следующей зоны
         previous_max = max_price_zone
     
     optimal_zone_id = 3
@@ -338,6 +418,8 @@ def recommend_price(order, output_format="json"):
         },
         "analysis": {
             "start_price": round(start_price, 2),
+            "calibrated_start": round(calibrated_start, 2),
+            "max_coef": round(max_coef, 2),
             "max_probability_percent": round(max_prob * 100, 2),
             "max_probability_price": round(max_prob_result["price"], 2),
             "scan_range": {

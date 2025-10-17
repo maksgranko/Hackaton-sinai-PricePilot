@@ -1,87 +1,191 @@
 {
-  "taxi_type": "business",
-  "zones": [
-    {
-      "zone_id": 1,
-      "zone_name": "zone_1_red_low",
-      "price_range": {
-        "min": 180.0,
-        "max": 279.45
+  "test_1_medium_business": {
+    "taxi_type": "business",
+    "zones": [
+      {
+        "zone_id": 1,
+        "zone_name": "zone_1_red_low",
+        "price_range": {
+          "min": 6613663813.87,
+          "max": 11963843924.05
+        },
+        "metrics": {
+          "avg_probability_percent": 40.52,
+          "avg_normalized_probability_percent": 97.13,
+          "avg_expected_value": 3770506553.57
+        }
       },
-      "metrics": {
-        "avg_probability_percent": 46.09,
-        "avg_normalized_probability_percent": 95.72,
-        "avg_expected_value": 106.29
+      {
+        "zone_id": 2,
+        "zone_name": "zone_2_yellow_low",
+        "price_range": {
+          "min": 11963843924.05,
+          "max": 14356612708.86
+        },
+        "metrics": {
+          "avg_probability_percent": 41.28,
+          "avg_normalized_probability_percent": 98.95,
+          "avg_expected_value": 5409565885.35
+        }
+      },
+      {
+        "zone_id": 3,
+        "zone_name": "zone_3_green",
+        "price_range": {
+          "min": 14356612708.86,
+          "max": 17546971088.61
+        },
+        "metrics": {
+          "avg_probability_percent": 40.21,
+          "avg_normalized_probability_percent": 96.39,
+          "avg_expected_value": 6105504209.07
+        }
       }
+    ],
+    "optimal_price": {
+      "price": 15951791898.74,
+      "probability_percent": 40.36,
+      "normalized_probability_percent": 96.74,
+      "expected_value": 6437373681.67,
+      "zone_id": 3
     },
-    {
-      "zone_id": 2,
-      "zone_name": "zone_2_yellow_low",
-      "price_range": {
-        "min": 279.45,
-        "max": 335.34
+    "analysis": {
+      "start_price": 180.0,
+      "calibrated_start": 7780780957.5,
+      "max_coef": 1.79,
+      "max_probability_percent": 41.72,
+      "max_probability_price": 11769603002.58,
+      "scan_range": {
+        "min": 6613663813.87,
+        "max": 15994367855.76
       },
-      "metrics": {
-        "avg_probability_percent": 46.68,
-        "avg_normalized_probability_percent": 96.95,
-        "avg_expected_value": 143.27
-      }
-    },
-    {
-      "zone_id": 3,
-      "zone_name": "zone_3_green",
-      "price_range": {
-        "min": 335.34,
-        "max": 409.86
-      },
-      "metrics": {
-        "avg_probability_percent": 43.7,
-        "avg_normalized_probability_percent": 90.76,
-        "avg_expected_value": 160.62
-      }
-    },
-    {
-      "zone_id": 4,
-      "zone_name": "zone_4_yellow_high",
-      "price_range": {
-        "min": 409.86,
-        "max": 484.38
-      },
-      "metrics": {
-        "avg_probability_percent": 36.69,
-        "avg_normalized_probability_percent": 76.19,
-        "avg_expected_value": 164.07
-      }
-    },
-    {
-      "zone_id": 5,
-      "zone_name": "zone_5_red_high",
-      "price_range": {
-        "min": 484.38,
-        "max": 521.64
-      },
-      "metrics": {
-        "avg_probability_percent": 37.58,
-        "avg_normalized_probability_percent": 78.04,
-        "avg_expected_value": 189.26
-      }
+      "timestamp": 1760724375
     }
-  ],
-  "optimal_price": {
-    "price": 372.6,
-    "probability_percent": 44.42,
-    "normalized_probability_percent": 92.25,
-    "expected_value": 165.52,
-    "zone_id": 3
   },
-  "analysis": {
-    "start_price": 180.0,
-    "max_probability_percent": 48.15,
-    "max_probability_price": 280.66,
-    "scan_range": {
-      "min": 180.0,
-      "max": 521.64
+  "test_2_short_business": {
+    "taxi_type": "business",
+    "zones": [
+      {
+        "zone_id": 1,
+        "zone_name": "zone_1_red_low",
+        "price_range": {
+          "min": 128.44,
+          "max": 144.01
+        },
+        "metrics": {
+          "avg_probability_percent": 33.22,
+          "avg_normalized_probability_percent": 75.84,
+          "avg_expected_value": 45.23
+        }
+      },
+      {
+        "zone_id": 2,
+        "zone_name": "zone_2_yellow_low",
+        "price_range": {
+          "min": 144.01,
+          "max": 172.81
+        },
+        "metrics": {
+          "avg_probability_percent": 33.71,
+          "avg_normalized_probability_percent": 76.95,
+          "avg_expected_value": 52.83
+        }
+      },
+      {
+        "zone_id": 3,
+        "zone_name": "zone_3_green",
+        "price_range": {
+          "min": 172.81,
+          "max": 211.21
+        },
+        "metrics": {
+          "avg_probability_percent": 38.79,
+          "avg_normalized_probability_percent": 88.55,
+          "avg_expected_value": 70.89
+        }
+      }
+    ],
+    "optimal_price": {
+      "price": 192.01,
+      "probability_percent": 43.8,
+      "normalized_probability_percent": 100.0,
+      "expected_value": 84.11,
+      "zone_id": 3
     },
-    "timestamp": 1760722356
+    "analysis": {
+      "start_price": 180.0,
+      "calibrated_start": 151.1,
+      "max_coef": 1.09,
+      "max_probability_percent": 43.8,
+      "max_probability_price": 190.48,
+      "scan_range": {
+        "min": 128.44,
+        "max": 192.01
+      },
+      "timestamp": 1760724384
+    }
+  },
+  "test_3_medium_economy": {
+    "taxi_type": "economy",
+    "zones": [
+      {
+        "zone_id": 1,
+        "zone_name": "zone_1_red_low",
+        "price_range": {
+          "min": 218.88,
+          "max": 268.44
+        },
+        "metrics": {
+          "avg_probability_percent": 45.95,
+          "avg_normalized_probability_percent": 97.4,
+          "avg_expected_value": 111.89
+        }
+      },
+      {
+        "zone_id": 2,
+        "zone_name": "zone_2_yellow_low",
+        "price_range": {
+          "min": 268.44,
+          "max": 322.13
+        },
+        "metrics": {
+          "avg_probability_percent": 44.16,
+          "avg_normalized_probability_percent": 93.62,
+          "avg_expected_value": 129.78
+        }
+      },
+      {
+        "zone_id": 3,
+        "zone_name": "zone_3_green",
+        "price_range": {
+          "min": 322.13,
+          "max": 393.72
+        },
+        "metrics": {
+          "avg_probability_percent": 41.44,
+          "avg_normalized_probability_percent": 87.84,
+          "avg_expected_value": 142.55
+        }
+      }
+    ],
+    "optimal_price": {
+      "price": 357.93,
+      "probability_percent": 41.62,
+      "normalized_probability_percent": 88.22,
+      "expected_value": 148.95,
+      "zone_id": 3
+    },
+    "analysis": {
+      "start_price": 180.0,
+      "calibrated_start": 257.5,
+      "max_coef": 1.23,
+      "max_probability_percent": 47.17,
+      "max_probability_price": 226.44,
+      "scan_range": {
+        "min": 218.88,
+        "max": 365.71
+      },
+      "timestamp": 1760724393
+    }
   }
 }

@@ -38,7 +38,7 @@ def detect_taxi_type(carname, carmodel):
     return "comfort"
 
 def build_enhanced_features(frame):
-    """Строит расширенный набор признаков"""
+    """Строит расширенный набор признаков (54 признака)"""
     ts = pd.to_datetime(frame["order_timestamp"], errors="coerce")
     hour = ts.dt.hour.fillna(0)
     wday = ts.dt.weekday.fillna(0)
@@ -146,7 +146,7 @@ def build_enhanced_features(frame):
         "is_new_driver": is_new_driver,
         "is_premium_car": is_premium_car,
         
-        # Тип такси (НОВОЕ!)
+        # Тип такси
         "is_economy": is_economy,
         "is_comfort": is_comfort,
         "is_business": is_business,
@@ -200,9 +200,24 @@ def build_enhanced_features(frame):
     return X
 
 def train_model(train_path="simple-train.csv", use_gpu=False):
-    """Обучает модель с XGBoost"""
+    """Обучает модель с XGBoost и минимальной фильтрацией"""
     print("📚 Загрузка данных...")
     df = pd.read_csv(train_path)
+    
+    print(f"📊 Всего записей: {len(df)}")
+    
+    # МИНИМАЛЬНАЯ ФИЛЬТРАЦИЯ: только нулевые/отрицательные значения
+    print("\n🔍 Фильтрация некорректных данных...")
+    df_clean = df[
+        (df['distance_in_meters'] > 0) &
+        (df['duration_in_seconds'] > 0) &
+        (df['price_start_local'] > 0)
+    ].copy()
+    
+    print(f"✅ После фильтрации: {len(df_clean)} записей")
+    print(f"❌ Удалено некорректных: {len(df) - len(df_clean)} ({(len(df) - len(df_clean))/len(df)*100:.2f}%)")
+    
+    df = df_clean
     
     required_cols = ['order_timestamp', 'price_start_local', 'is_done', 'driver_reg_date']
     missing = [col for col in required_cols if col not in df.columns]
@@ -210,7 +225,7 @@ def train_model(train_path="simple-train.csv", use_gpu=False):
         raise ValueError(f"Отсутствуют столбцы: {missing}")
     
     df = df.dropna(subset=required_cols)
-    print(f"📊 Всего записей: {len(df)}")
+    print(f"📊 Финальное кол-во записей: {len(df)}")
     
     X = build_enhanced_features(df)
     y = (df["is_done"].astype(str).str.lower() == "done").astype(int)
