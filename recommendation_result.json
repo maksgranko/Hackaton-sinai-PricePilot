@@ -1,0 +1,87 @@
+{
+  "taxi_type": "business",
+  "zones": [
+    {
+      "zone_id": 1,
+      "zone_name": "zone_1_red_low",
+      "price_range": {
+        "min": 180.0,
+        "max": 279.45
+      },
+      "metrics": {
+        "avg_probability_percent": 46.09,
+        "avg_normalized_probability_percent": 95.72,
+        "avg_expected_value": 106.29
+      }
+    },
+    {
+      "zone_id": 2,
+      "zone_name": "zone_2_yellow_low",
+      "price_range": {
+        "min": 279.45,
+        "max": 335.34
+      },
+      "metrics": {
+        "avg_probability_percent": 46.68,
+        "avg_normalized_probability_percent": 96.95,
+        "avg_expected_value": 143.27
+      }
+    },
+    {
+      "zone_id": 3,
+      "zone_name": "zone_3_green",
+      "price_range": {
+        "min": 335.34,
+        "max": 409.86
+      },
+      "metrics": {
+        "avg_probability_percent": 43.7,
+        "avg_normalized_probability_percent": 90.76,
+        "avg_expected_value": 160.62
+      }
+    },
+    {
+      "zone_id": 4,
+      "zone_name": "zone_4_yellow_high",
+      "price_range": {
+        "min": 409.86,
+        "max": 484.38
+      },
+      "metrics": {
+        "avg_probability_percent": 36.69,
+        "avg_normalized_probability_percent": 76.19,
+        "avg_expected_value": 164.07
+      }
+    },
+    {
+      "zone_id": 5,
+      "zone_name": "zone_5_red_high",
+      "price_range": {
+        "min": 484.38,
+        "max": 521.64
+      },
+      "metrics": {
+        "avg_probability_percent": 37.58,
+        "avg_normalized_probability_percent": 78.04,
+        "avg_expected_value": 189.26
+      }
+    }
+  ],
+  "optimal_price": {
+    "price": 372.6,
+    "probability_percent": 44.42,
+    "normalized_probability_percent": 92.25,
+    "expected_value": 165.52,
+    "zone_id": 3
+  },
+  "analysis": {
+    "start_price": 180.0,
+    "max_probability_percent": 48.15,
+    "max_probability_price": 280.66,
+    "scan_range": {
+      "min": 180.0,
+      "max": 521.64
+    },
+    "timestamp": 1760722356
+  }
+}

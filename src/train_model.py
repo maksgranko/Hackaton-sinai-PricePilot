@@ -1,17 +1,49 @@
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.calibration import CalibratedClassifierCV
+import xgboost as xgb
 import joblib
 
+def detect_taxi_type(carname, carmodel):
+    """Определяет тип такси по марке и модели"""
+    carname = str(carname).strip()
+    carmodel = str(carmodel).strip()
+    
+    economy_brands = ['Daewoo', 'Lifan', 'FAW', 'Great Wall', 'Geely', 'ЗАЗ', 'Chery']
+    economy_models = [
+        'Logan', 'Symbol', 'Sandero', 'Lacetti', 'Aveo', 'Nexia', 'Rio', 'Spectra',
+        'Granta', 'Гранта', 'Kalina', 'Калина', 'Priora', 'Приора', 
+        '2110', '2112', '2115', '2107', '2114', 'Самара', 'S18'
+    ]
+    
+    business_brands = ['Toyota', 'Honda', 'Mitsubishi', 'Subaru']
+    business_models = [
+        'Camry', 'Corolla', 'RAV4', 'Avensis', 'Civic', 'Accord', 
+        'Qashqai', 'X-Trail', 'Tiguan', 'Passat CC', 'Passat',
+        'CX-5', 'Outlander', 'Kyron', 'Legacy'
+    ]
+    
+    lada_comfort_models = ['Vesta', 'Веста', 'X-Ray', 'Largus', 'Ларгус', 'GFK110']
+    
+    if carname in economy_brands or carmodel in economy_models:
+        return "economy"
+    
+    if carname in business_brands or carmodel in business_models:
+        return "business"
+    
+    if carname in ['LADA', 'Лада', 'ВАЗ (LADA)'] and carmodel in lada_comfort_models:
+        return "comfort"
+    
+    return "comfort"
+
 def build_enhanced_features(frame):
-    """Строит расширенный набор признаков (независимо от года/месяца)"""
+    """Строит расширенный набор признаков"""
     ts = pd.to_datetime(frame["order_timestamp"], errors="coerce")
     hour = ts.dt.hour.fillna(0)
     wday = ts.dt.weekday.fillna(0)
     
-    # Временные признаки (независимы от года!)
+    # Временные признаки
     is_morning_rush = ((hour >= 7) & (hour <= 9)).astype(int)
     is_evening_rush = ((hour >= 15) & (hour <= 17)).astype(int)
     is_night_rush = ((hour >= 19) & (hour <= 21)).astype(int)
@@ -33,11 +65,22 @@ def build_enhanced_features(frame):
     driver_experience_months = days_since_reg / 30.0
     is_new_driver = (days_since_reg < 30).astype(float)
     
-    # Марка автомобиля
+    # Тип такси
+    if 'carname' in frame.columns and 'carmodel' in frame.columns:
+        taxi_types = frame.apply(lambda row: detect_taxi_type(row['carname'], row['carmodel']), axis=1)
+        is_economy = (taxi_types == 'economy').astype(float)
+        is_comfort = (taxi_types == 'comfort').astype(float)
+        is_business = (taxi_types == 'business').astype(float)
+    else:
+        is_economy = pd.Series(0.3, index=frame.index)
+        is_comfort = pd.Series(0.5, index=frame.index)
+        is_business = pd.Series(0.2, index=frame.index)
+    
+    # Марка автомобиля (премиум)
     premium_brands = ['Toyota', 'Volkswagen', 'Hyundai', 'Nissan', 'Skoda']
     is_premium_car = frame.get("carname", pd.Series("", index=frame.index)).isin(premium_brands).astype(float)
     
-    # Частота клиента (агрегация по user_id)
+    # Частота клиента
     if 'user_id' in frame.columns:
         user_counts = frame.groupby('user_id').size()
         frame['user_order_count'] = frame['user_id'].map(user_counts).fillna(1)
@@ -50,11 +93,23 @@ def build_enhanced_features(frame):
         tender_time = pd.to_datetime(frame["tender_timestamp"], errors="coerce")
         response_time_seconds = (tender_time - ts).dt.total_seconds().fillna(60)
         response_time_minutes = response_time_seconds / 60.0
-        # Логарифм времени отклика (сглаживает выбросы)
         log_response_time = np.log1p(response_time_minutes)
     else:
         response_time_minutes = pd.Series(0, index=frame.index)
         log_response_time = pd.Series(0, index=frame.index)
+    
+    # Усиленные временные взаимодействия
+    hour_normalized = hour / 24.0
+    rating = frame.get("driver_rating", pd.Series(0, index=frame.index))
+    
+    hour_x_rating = hour_normalized * rating
+    night_x_rating = is_night * rating
+    peak_x_rating_strong = is_peak_hour * rating * 2
+    
+    hour_x_dist_strong = hour_normalized * dist_km * 10
+    night_x_dist_strong = is_night * dist_km * 5
+    weekend_x_hour = is_weekend * hour_normalized
+    peak_x_dist_strong = is_peak_hour * dist_km * 3
     
     X = pd.DataFrame({
         # Базовые признаки
@@ -62,10 +117,10 @@ def build_enhanced_features(frame):
         "dur_min": dur_min,
         "pickup_km": pickup_km,
         "pickup_min": pickup_min,
-        "rating": frame.get("driver_rating", pd.Series(0, index=frame.index)),
+        "rating": rating,
         "log_start": log_start,
         
-        # Временные признаки (циклические - НЕ зависят от года!)
+        # Временные признаки (циклические)
         "hour_sin": np.sin(2*np.pi*hour/24.0),
         "hour_cos": np.cos(2*np.pi*hour/24.0),
         "wday_sin": np.sin(2*np.pi*wday/7.0),
@@ -91,6 +146,11 @@ def build_enhanced_features(frame):
         "is_new_driver": is_new_driver,
         "is_premium_car": is_premium_car,
         
+        # Тип такси (НОВОЕ!)
+        "is_economy": is_economy,
+        "is_comfort": is_comfort,
+        "is_business": is_business,
+        
         # Информация о клиенте
         "is_frequent_user": is_frequent_user,
         
@@ -99,7 +159,7 @@ def build_enhanced_features(frame):
         "log_response_time": log_response_time,
         
         # Базовые взаимодействия
-        "rush_x_rating": is_peak_hour * frame.get("driver_rating", pd.Series(0, index=frame.index)),
+        "rush_x_rating": is_peak_hour * rating,
         "weekend_x_dist": is_weekend * dist_km,
         "peak_x_price_per_km": is_peak_hour * price_per_km,
         "hour_x_weekend": hour * is_weekend / 24.0,
@@ -117,20 +177,33 @@ def build_enhanced_features(frame):
         
         # Новые взаимодействия
         "premium_x_price": is_premium_car * log_start,
-        "experience_x_rating": driver_experience_months * frame.get("driver_rating", pd.Series(0, index=frame.index)),
+        "experience_x_rating": driver_experience_months * rating,
         "new_driver_x_price": is_new_driver * log_start,
         "frequent_user_x_price": is_frequent_user * log_start,
+        
+        # Усиленные временные взаимодействия
+        "hour_x_rating": hour_x_rating,
+        "night_x_rating": night_x_rating,
+        "peak_x_rating_strong": peak_x_rating_strong,
+        "hour_x_dist_strong": hour_x_dist_strong,
+        "night_x_dist_strong": night_x_dist_strong,
+        "weekend_x_hour": weekend_x_hour,
+        "peak_x_dist_strong": peak_x_dist_strong,
+        
+        # Взаимодействия с типом такси
+        "business_x_dist": is_business * dist_km,
+        "business_x_price": is_business * log_start,
+        "economy_x_price": is_economy * log_start,
     }).fillna(0.0)
     
     X = X.replace([np.inf, -np.inf], 0)
     return X
 
-def train_model(train_path="simple-train.csv"):
-    """Обучает улучшенную модель с расширенными признаками"""
+def train_model(train_path="simple-train.csv", use_gpu=False):
+    """Обучает модель с XGBoost"""
     print("📚 Загрузка данных...")
     df = pd.read_csv(train_path)
     
-    # Проверяем наличие всех необходимых столбцов
     required_cols = ['order_timestamp', 'price_start_local', 'is_done', 'driver_reg_date']
     missing = [col for col in required_cols if col not in df.columns]
     if missing:
@@ -145,28 +218,54 @@ def train_model(train_path="simple-train.csv"):
     print(f"❌ Отменённых заказов: {len(y)-y.sum()} ({(len(y)-y.sum())/len(y)*100:.2f}%)")
     
     print(f"\n🔧 Использовано признаков: {len(X.columns)}")
-    print(f"   Новые: стаж водителя, марка машины, частота клиента, время отклика")
-    print(f"   Модель НЕ зависит от года/месяца - только день недели и час суток")
+    print(f"   + Тип такси: economy/comfort/business")
+    print(f"   + Усиленные временные взаимодействия")
     
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
     
-    base_model = GradientBoostingClassifier(
-        n_estimators=200,
-        learning_rate=0.1,
-        max_depth=5,
-        min_samples_split=50,
-        min_samples_leaf=20,
+    if use_gpu:
+        print("\n🚀 Обучение XGBoost с GPU (gpu_hist)...")
+        tree_method = 'gpu_hist'
+        gpu_id = 0
+    else:
+        print("\n🚀 Обучение XGBoost с CPU (hist, многопоточность)...")
+        tree_method = 'hist'
+        gpu_id = -1
+    
+    base_model = xgb.XGBClassifier(
+        n_estimators=300,
+        learning_rate=0.05,
+        max_depth=6,
+        min_child_weight=15,
         subsample=0.8,
-        random_state=42
+        colsample_bytree=0.8,
+        tree_method=tree_method,
+        gpu_id=gpu_id,
+        n_jobs=-1,
+        random_state=42,
+        eval_metric='logloss'
     )
     
-    print("\n🚀 Обучение модели...")
-    clf = CalibratedClassifierCV(base_model, cv=5, method="sigmoid")
+    base_model.fit(Xtr, ytr)
+    
+    print("\n🔍 Топ-20 самых важных признаков:")
+    feature_importance = base_model.feature_importances_
+    feature_names = X.columns
+    importance_df = pd.DataFrame({
+        'feature': feature_names,
+        'importance': feature_importance
+    }).sort_values('importance', ascending=False).head(20)
+    
+    for idx, row in importance_df.iterrows():
+        print(f"   {row['feature']:<35} {row['importance']:.4f}")
+    
+    print("\n🔧 Калибровка вероятностей (CalibratedClassifierCV)...")
+    clf = CalibratedClassifierCV(base_model, cv=3, method="sigmoid", n_jobs=-1)
     clf.fit(Xtr, ytr)
     
     train_score = clf.score(Xtr, ytr)
     test_score = clf.score(Xte, yte)
-    print(f"📈 Точность на train: {train_score:.4f}")
+    print(f"\n📈 Точность на train: {train_score:.4f}")
     print(f"📈 Точность на test: {test_score:.4f}")
     
     joblib.dump({
@@ -175,7 +274,17 @@ def train_model(train_path="simple-train.csv"):
     }, "model_enhanced.joblib")
     
     print("\n✅ Модель обучена и сохранена в model_enhanced.joblib")
+    if use_gpu:
+        print("🎮 Использован GPU для ускорения")
+    else:
+        print("💻 Использован CPU (многопоточность)")
+    
     return clf
 
 if __name__ == "__main__":
-    train_model()
+    try:
+        train_model(use_gpu=True)
+    except Exception as e:
+        print(f"\n⚠️  GPU недоступен: {e}")
+        print("🔄 Переключаемся на CPU...")
+        train_model(use_gpu=False)
