@@ -91,8 +91,6 @@ class ModelResponse(BaseModel):
     zones: List[Zone]
     optimal_price: OptimalPrice
     analysis: ModelAnalysis
-    price_probabilities: Optional[Dict[str, PriceProbability]] = None
-    recommendations: Optional[List[Recommendation]] = None
 
 
 class User(BaseModel):

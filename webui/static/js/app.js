@@ -66,6 +66,20 @@ function logAction(action) {
   console.log(`[ACTION] ${new Date().toLocaleTimeString()}: ${action}`);
 }
 
+function showLoading() {
+  const loadingOverlay = document.getElementById("loading-overlay");
+  if (loadingOverlay) {
+    loadingOverlay.classList.add("visible");
+  }
+}
+
+function hideLoading() {
+  const loadingOverlay = document.getElementById("loading-overlay");
+  if (loadingOverlay) {
+    loadingOverlay.classList.remove("visible");
+  }
+}
+
 async function requestToken(credentials = DEMO_ACCOUNT) {
   const payload = new URLSearchParams();
   payload.set("username", credentials.username);
@@ -666,6 +680,7 @@ function applyDataToUi(data) {
 
 async function bootstrap() {
   try {
+    showLoading();
     const initialOrder = {
       ...state.order,
       order_timestamp: normalizeTimestamp(state.order.order_timestamp),
@@ -676,6 +691,8 @@ async function bootstrap() {
   } catch (error) {
     console.error(error);
     alert("Не удалось загрузить данные PricePilot. Проверь авторизацию и API.");
+  } finally {
+    hideLoading();
   }
 }
 
@@ -825,6 +842,7 @@ async function acceptCurrentPrice() {
 
 async function activeBidUpdate(targetPrice) {
   try {
+    showLoading();
     const normalizedPrice = Number(targetPrice);
     
     // Update only necessary fields, keep all others from state.order
@@ -856,6 +874,8 @@ async function activeBidUpdate(targetPrice) {
   } catch (error) {
     console.error(error);
     alert(`Не удалось обновить ставку: ${error.message}`);
+  } finally {
+    hideLoading();
   }
 }
 
