@@ -24,11 +24,15 @@ const BASE_ORDER = {
   driver_rating: 5,
   platform: "android",
   price_start_local: 180,
+  carname: "",
   ...(CONFIG.orderDefaults || {}),
 };
 
 if (BASE_ORDER.price_start_local != null) {
   BASE_ORDER.price_start_local = Number(BASE_ORDER.price_start_local);
+}
+if (BASE_ORDER.carname == null) {
+  BASE_ORDER.carname = "";
 }
 
 const state = {
@@ -39,6 +43,9 @@ const state = {
   priceMax: 0,
   priceStep: 5,
   ready: false,
+  debugPanelVisible: false,
+  lotteryEnabled: false,
+  lastLotteryOutcome: null,
 };
 
 let pricePointer;
@@ -107,6 +114,16 @@ function formatCurrency(value) {
   return `${Number(value).toFixed(0)}₽`;
 }
 
+function setDebugStatus(elementId, message, variant = "") {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  el.textContent = message;
+  el.classList.remove("success", "error");
+  if (variant) {
+    el.classList.add(variant);
+  }
+}
+
 function computePriceBoundsFromData(data) {
   const rawMin =
     data?.analysis?.scan_range?.min ?? data?.analysis?.start_price ?? state.priceMin ?? 0;
@@ -129,6 +146,132 @@ function enrichData(data) {
     data.price_probabilities = {};
   }
   return data;
+}
+
+function syncDebugControls() {
+  const panel = document.getElementById("debug-panel");
+  if (!panel) return;
+  const carSelect = document.getElementById("debug-carname");
+  if (carSelect) {
+    const value = state.order.carname ?? "";
+    if (carSelect.value !== value) {
+      carSelect.value = value;
+    }
+  }
+  const lotteryToggle = document.getElementById("debug-lottery-toggle");
+  if (lotteryToggle) {
+    lotteryToggle.checked = state.lotteryEnabled;
+  }
+}
+
+function toggleDebugPanel(force) {
+  const panel = document.getElementById("debug-panel");
+  const overlay = document.getElementById("debug-overlay");
+  if (!panel) return;
+  const shouldShow =
+    typeof force === "boolean" ? force : !state.debugPanelVisible;
+  panel.classList.toggle("visible", shouldShow);
+  if (overlay) {
+    overlay.classList.toggle("visible", shouldShow);
+  }
+  state.debugPanelVisible = shouldShow;
+  if (shouldShow) {
+    syncDebugControls();
+    logAction("Debug panel opened.");
+  } else {
+    logAction("Debug panel closed.");
+  }
+}
+
+function clearJsonEditor() {
+  const input = document.getElementById("debug-json-input");
+  if (input) {
+    input.value = "";
+  }
+  setDebugStatus("debug-json-status", "JSON cleared.", "");
+}
+
+async function applyJsonOverride() {
+  const input = document.getElementById("debug-json-input");
+  if (!input) return;
+  const raw = input.value.trim();
+  if (!raw) {
+    setDebugStatus("debug-json-status", "Введите JSON.", "error");
+    return;
+  }
+  try {
+    const overrides = JSON.parse(raw);
+    state.order = {
+      ...state.order,
+      ...overrides,
+    };
+    if (state.order.price_start_local != null) {
+      state.order.price_start_local = Number(state.order.price_start_local);
+    }
+    if (state.order.carname == null) {
+      state.order.carname = "";
+    }
+    setDebugStatus("debug-json-status", "JSON overrides applied.", "success");
+    logAction("JSON override applied via debugger.");
+    const targetPrice =
+      Number(state.order.price_start_local) || state.priceMin || BASE_ORDER.price_start_local;
+    await activeBidUpdate(targetPrice);
+  } catch (error) {
+    console.error(error);
+    setDebugStatus("debug-json-status", `Override failed: ${error.message}`, "error");
+  }
+}
+
+async function handleCarSelection(event) {
+  const value = event?.target?.value ?? "";
+  state.order = {
+    ...state.order,
+    carname: value,
+  };
+  logAction(`Car brand set to "${value || "default"}" via debugger.`);
+  const targetPrice =
+    Number(state.order.price_start_local) || state.priceMin || BASE_ORDER.price_start_local;
+  try {
+    await activeBidUpdate(targetPrice);
+  } catch (error) {
+    console.error(error);
+    setDebugStatus("debug-json-status", `Car update failed: ${error.message}`, "error");
+  }
+}
+
+function toggleLotteryMode(enabled) {
+  state.lotteryEnabled = enabled;
+  const message = enabled
+    ? "Lottery mode enabled. Client decision will be simulated."
+    : "Lottery mode disabled.";
+  setDebugStatus("debug-lottery-log", message, enabled ? "success" : "");
+  logAction(`Lottery mode ${enabled ? "enabled" : "disabled"}.`);
+  if (!enabled) {
+    state.lastLotteryOutcome = null;
+  }
+}
+
+function runLotterySimulation(response) {
+  if (!state.lotteryEnabled || !response?.optimal_price) {
+    return;
+  }
+  const chance = Number(response.optimal_price.normalized_probability_percent || 0) / 100;
+  const roll = Math.random();
+  const accepted = roll <= chance;
+  const message = `${new Date().toLocaleTimeString()} — ${accepted ? "client ACCEPTED" : "client REJECTED"} @ ${response.optimal_price.price}₽ (chance ${(chance * 100).toFixed(1)}%, roll ${(roll * 100).toFixed(1)}%)`;
+  setDebugStatus("debug-lottery-log", message, accepted ? "success" : "error");
+  state.lastLotteryOutcome = { accepted, chance, roll };
+}
+
+async function refreshToken() {
+  try {
+    state.token = await requestToken();
+    setDebugStatus("debug-token-status", "JWT refreshed successfully.", "success");
+    logAction("JWT token refreshed via debugger.");
+  } catch (error) {
+    console.error(error);
+    setDebugStatus("debug-token-status", `Token refresh failed: ${error.message}`, "error");
+  }
 }
 
 function hydrateSummaryPanels(data) {
@@ -292,6 +435,7 @@ function applyDataToUi(data) {
   state.order = {
     ...state.order,
     price_start_local: Number(state.data.analysis?.start_price ?? state.order.price_start_local),
+    carname: state.order.carname ?? "",
   };
 
   hydrateSummaryPanels(state.data);
@@ -300,6 +444,8 @@ function applyDataToUi(data) {
   updatePointerAndDisplay(initialPrice);
   state.ready = true;
   logAction("PricePilot data synced with UI");
+  syncDebugControls();
+  runLotterySimulation(state.data);
 }
 
 async function bootstrap() {
@@ -414,6 +560,7 @@ async function activeBidUpdate(targetPrice) {
       ...state.order,
       price_start_local: normalizedPrice,
       order_timestamp: Math.floor(Date.now() / 1000),
+      carname: state.order.carname ?? "",
     };
     const freshData = await requestPricing(state.order);
     applyDataToUi(freshData);
@@ -468,8 +615,7 @@ function changePrice(delta) {
 }
 
 function openMenu() {
-  logAction("Menu button clicked.");
-  alert("Меню открыто. Здесь будут настройки и история поездок.");
+  toggleDebugPanel(!state.debugPanelVisible);
 }
 
 function showAnalysis() {
@@ -494,6 +640,11 @@ function wireGlobalHandlers() {
   window.showAnalysis = showAnalysis;
   window.closeModal = closeModal;
   window.logAction = logAction;
+  window.applyJsonOverride = applyJsonOverride;
+  window.clearJsonEditor = clearJsonEditor;
+  window.toggleLotteryMode = toggleLotteryMode;
+  window.refreshToken = refreshToken;
+  window.toggleDebugPanel = toggleDebugPanel;
 }
 
 function bindModalDismiss() {
@@ -514,6 +665,20 @@ document.addEventListener("DOMContentLoaded", () => {
   bindInputEvents();
   bindModalDismiss();
   wireGlobalHandlers();
+
+  const carSelect = document.getElementById("debug-carname");
+  if (carSelect) {
+    carSelect.value = state.order.carname ?? "";
+    carSelect.addEventListener("change", handleCarSelection);
+  }
+  const debugToggleButton = document.getElementById("debug-toggle-button");
+  if (debugToggleButton) {
+    debugToggleButton.addEventListener("click", () => toggleDebugPanel(!state.debugPanelVisible));
+  }
+  const debugOverlay = document.getElementById("debug-overlay");
+  if (debugOverlay) {
+    debugOverlay.addEventListener("click", () => toggleDebugPanel(false));
+  }
 
   bootstrap();
 });

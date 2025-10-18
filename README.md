@@ -43,6 +43,8 @@ You can tweak behaviour with environment variables before starting the app:
 
 If you expose the UI from a different origin, remember to allow it via `BACKEND_ALLOW_ORIGINS`, e.g. `BACKEND_ALLOW_ORIGINS="http://127.0.0.1:3000"`.
 
+Press the bug icon in the header to open the built-in debugger: set `carname`, inject raw JSON overrides, toggle lottery-mode client simulation, or refresh the JWT token without reloading the page.
+
 ## ML Integration
 
 By default the backend returns a mocked response. To plug in the bundled Python model (`src/recommend_price.py`) or your own implementation:

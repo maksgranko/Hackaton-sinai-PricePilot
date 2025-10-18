@@ -21,7 +21,7 @@
     <div class="app-container" id="app-container">
       <div class="map-area">
         <div class="header">
-          <button onclick="openMenu()" title="Меню"><i class="fas fa-bars"></i></button>
+          <button id="debug-toggle-button" title="Debug menu"><i class="fas fa-bug"></i></button>
           <div style="display: flex; gap: 10px">
             <button onclick="toggleTheme()" title="Переключить тему">
               <i class="fas fa-sun" id="theme-icon"></i>
@@ -42,6 +42,57 @@
           />
         </div>
       </div>
+
+      <div class="debug-overlay" id="debug-overlay"></div>
+      <aside class="debug-panel" id="debug-panel">
+        <div class="debug-header">
+          <h2>Dev Debugger</h2>
+          <button class="debug-close" onclick="toggleDebugPanel(false)">&times;</button>
+        </div>
+        <section class="debug-section">
+          <h3>Car Setup</h3>
+          <label class="debug-label">
+            Car brand
+            <select id="debug-carname" class="debug-select">
+              <option value="">Default fleet</option>
+              <option value="Toyota">Toyota</option>
+              <option value="Volkswagen">Volkswagen</option>
+              <option value="Hyundai">Hyundai</option>
+              <option value="Nissan">Nissan</option>
+              <option value="Skoda">Skoda</option>
+              <option value="Kia">Kia</option>
+              <option value="Renault">Renault</option>
+              <option value="Ford">Ford</option>
+              <option value="Geely">Geely</option>
+              <option value="Chery">Chery</option>
+            </select>
+          </label>
+        </section>
+        <section class="debug-section">
+          <h3>Raw JSON injector</h3>
+          <div id="debug-json-container" class="debug-json-container">
+            <textarea id="debug-json-input" spellcheck="false" placeholder='{"price_start_local":210,"distance_in_meters":4200}'></textarea>
+            <div class="debug-json-actions">
+              <button class="debug-button apply" onclick="applyJsonOverride()">Apply JSON</button>
+              <button class="debug-button clear" onclick="clearJsonEditor()">Clear</button>
+            </div>
+            <div id="debug-json-status" class="debug-status"></div>
+          </div>
+        </section>
+        <section class="debug-section">
+          <h3>Lottery mode</h3>
+          <label class="debug-toggle">
+            <input type="checkbox" id="debug-lottery-toggle" onchange="toggleLotteryMode(this.checked)" />
+            <span>Simulate client decisions (uses normalized probability)</span>
+          </label>
+          <div id="debug-lottery-log" class="debug-status"></div>
+        </section>
+        <section class="debug-section">
+          <h3>Auth</h3>
+          <button class="debug-button" onclick="refreshToken()">Refresh JWT</button>
+          <div id="debug-token-status" class="debug-status"></div>
+        </section>
+      </aside>
 
       <div class="bottom-sheet" id="bottom-sheet">
         <div class="handle-bar"></div>
