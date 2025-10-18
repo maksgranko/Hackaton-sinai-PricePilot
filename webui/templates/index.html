@@ -32,14 +32,39 @@
           </div>
         </div>
         <div class="location-input-container">
-          <i class="fas fa-search"></i>
-          <input
-            type="text"
-            id="location-input"
-            class="location-input"
-            value="Улица Воронеча В.И., 30+5 → ул. Яхонтовая, 1"
-            onchange="logAction('Location changed to: ' + this.value)"
-          />
+          <div class="location-input-group">
+            <div class="location-field">
+              <i class="fas fa-search location-icon" title="Откуда (ищем клиента)" onclick="showFromLocationModal()"></i>
+              <input
+                type="text"
+                id="location-from"
+                class="location-input"
+                placeholder="Откуда забираем клиента?"
+                value="Улица Воронеча В.И., 30+5"
+                onchange="logAction('From location changed to: ' + this.value)"
+              />
+            </div>
+            <div class="pickup-time" id="pickup-time">
+              <i class="fas fa-clock"></i>
+              <span id="pickup-time-text">~2 мин до клиента</span>
+            </div>
+            <div class="location-divider"></div>
+            <div class="location-field">
+              <i class="fas fa-map-marker-alt location-icon" title="Куда (точка назначения)" onclick="showToLocationModal()"></i>
+              <input
+                type="text"
+                id="location-to"
+                class="location-input"
+                placeholder="Куда везём?"
+                value="ул. Яхонтовая, 1"
+                onchange="logAction('To location changed to: ' + this.value)"
+              />
+            </div>
+            <div class="pickup-time" id="trip-duration">
+              <i class="fas fa-route"></i>
+              <span id="trip-duration-text">~25 мин в пути • 12.0 км</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -146,6 +171,34 @@
       </div>
     </div>
 
+    <!-- Модальное окно для адреса "ОТКУДА" (где клиент) -->
+    <div id="from-location-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Откуда забираем клиента</h3>
+          <span class="close-button" onclick="closeFromLocationModal()">&times;</span>
+        </div>
+        <div class="modal-body">
+          <p id="from-location-full-text">Улица Воронеча В.И., 30+5</p>
+          <p class="location-description">Точка посадки клиента</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Модальное окно для адреса "КУДА" (назначение) -->
+    <div id="to-location-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Куда везём клиента</h3>
+          <span class="close-button" onclick="closeToLocationModal()">&times;</span>
+        </div>
+        <div class="modal-body">
+          <p id="to-location-full-text">ул. Яхонтовая, 1</p>
+          <p class="location-description">Точка назначения</p>
+        </div>
+      </div>
+    </div>
+
     <div id="analysis-modal" class="modal">
       <div class="modal-content">
         <div class="modal-header">
@@ -198,10 +251,12 @@
           </table>
         </div>
 
-        <h4 style="margin-top: 20px">Интерпретация Нормализации</h4>
+        <h4 style="margin-top: 20px">Почему оптимальная цена лучше?</h4>
         <p style="font-size: 13px; line-height: 1.5; padding: 0 5px; opacity: 0.8" id="normalization-description">
-          Нормализованная вероятность (0-100%) показывает, насколько выбранная зона близка к
-          <strong>максимально достижимой вероятности</strong> для этого заказа.
+          Оптимальная цена максимизирует <strong>ожидаемую выгоду</strong> = цена × вероятность принятия. 
+          Например: цена 435₽ с вероятностью 73% даёт выгоду 317₽, а цена 720₽ с вероятностью 17% — только 122₽.
+          <br><br>
+          <strong>Нормализованная вероятность</strong> показывает, насколько близка зона к максимально достижимой вероятности для этого заказа.
         </p>
       </div>
     </div>

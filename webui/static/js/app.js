@@ -176,7 +176,13 @@ function computePriceBoundsFromData(data) {
     const lastZone = data.zones[data.zones.length - 1];
     
     const min = Number(firstZone.price_range.min);
-    const max = Number(lastZone.price_range.max);
+    const zonesMax = Number(lastZone.price_range.max);
+    
+    // Расширяем диапазон на 50% выше последней зоны, 
+    // чтобы показать красные/жёлтые зоны с низкой вероятностью
+    const extension = (zonesMax - min) * 0.5;
+    const max = zonesMax + Math.max(extension, 100); // минимум +100₽
+    
     const stepCandidate = Number(data?.analysis?.price_increment ?? state.priceStep ?? 5);
     const step = stepCandidate > 0 ? stepCandidate : 5;
     
@@ -317,6 +323,59 @@ function updateClientDetailsFromOrder() {
     : "25";
   
   detailsSpan.innerHTML = `<i class="fas fa-star" style="color: var(--warning-color); margin-right: 3px"></i>${rating} Рейтинг | ${distanceKm} км | ${timeMin} мин`;
+  
+  // Обновляем время прибытия до клиента
+  updatePickupTime();
+}
+
+function updatePickupTime() {
+  const order = state.order;
+  const pickupTimeText = document.getElementById("pickup-time-text");
+  if (!pickupTimeText) return;
+  
+  if (order.pickup_in_seconds != null && order.pickup_in_seconds > 0) {
+    const pickupMin = Math.round(order.pickup_in_seconds / 60);
+    pickupTimeText.textContent = `~${pickupMin} мин до клиента`;
+  } else if (order.pickup_in_meters != null && order.pickup_in_meters > 0) {
+    // Fallback: примерно 30 км/ч в городе
+    const estimatedSeconds = (order.pickup_in_meters / 1000) * (60 / 30) * 60;
+    const pickupMin = Math.round(estimatedSeconds / 60);
+    pickupTimeText.textContent = `~${pickupMin} мин до клиента`;
+  } else {
+    pickupTimeText.textContent = "~2 мин до клиента";
+  }
+  
+  // Обновляем время в пути
+  updateTripDuration();
+}
+
+function updateTripDuration() {
+  const order = state.order;
+  const tripDurationText = document.getElementById("trip-duration-text");
+  if (!tripDurationText) return;
+  
+  let durationText = "";
+  
+  // Время в пути
+  if (order.duration_in_seconds != null && order.duration_in_seconds > 0) {
+    const durationMin = Math.round(order.duration_in_seconds / 60);
+    durationText = `~${durationMin} мин в пути`;
+  } else if (order.distance_in_meters != null && order.distance_in_meters > 0) {
+    // Fallback: примерно 30 км/ч средняя скорость в городе
+    const estimatedSeconds = (order.distance_in_meters / 1000) * (60 / 30) * 60;
+    const durationMin = Math.round(estimatedSeconds / 60);
+    durationText = `~${durationMin} мин в пути`;
+  } else {
+    durationText = "~25 мин в пути";
+  }
+  
+  // Добавляем расстояние
+  if (order.distance_in_meters != null && order.distance_in_meters > 0) {
+    const distanceKm = (order.distance_in_meters / 1000).toFixed(1);
+    durationText += ` • ${distanceKm} км`;
+  }
+  
+  tripDurationText.textContent = durationText;
 }
 
 function hydrateSummaryPanels(data) {
@@ -325,31 +384,16 @@ function hydrateSummaryPanels(data) {
   // Сохраняем оптимальную цену в state для использования в setOptimalPrice
   state.optimalPrice = Math.round(optimal.price / state.priceStep) * state.priceStep;
   
-  // Обновляем метки min/max цены - показываем общие границы
-  if (data.zones && data.zones.length > 0) {
-    const firstZone = data.zones[0];
-    const lastZone = data.zones[data.zones.length - 1];
-    
-    document.getElementById("label-min-price").textContent = `${formatCurrency(
-      firstZone.price_range.min
-    )} (Мин)`;
-    document.getElementById("label-avg-price").textContent = `${formatCurrency(
-      (firstZone.price_range.min + lastZone.price_range.max) / 2
-    )}`;
-    document.getElementById("label-max-price").textContent = `${formatCurrency(
-      lastZone.price_range.max
-    )} (Макс)`;
-  } else {
-    document.getElementById("label-min-price").textContent = `${formatCurrency(
-      state.priceMin
-    )} (Мін)`;
-    document.getElementById("label-avg-price").textContent = `${formatCurrency(
-      (state.priceMin + state.priceMax) / 2
-    )}`;
-    document.getElementById("label-max-price").textContent = `${formatCurrency(
-      state.priceMax
-    )} (Макс)`;
-  }
+  // Обновляем метки min/max цены - показываем расширенные границы
+  document.getElementById("label-min-price").textContent = `${formatCurrency(
+    state.priceMin
+  )} (Мин)`;
+  document.getElementById("label-avg-price").textContent = `${formatCurrency(
+    (state.priceMin + state.priceMax) / 2
+  )}`;
+  document.getElementById("label-max-price").textContent = `${formatCurrency(
+    state.priceMax
+  )} (Макс)`;
 
   document.getElementById(
     "optimal-price-text"
@@ -364,6 +408,15 @@ function extractZoneColor(zoneName) {
   if (zoneName.includes("yellow")) return "yellow";
   if (zoneName.includes("red")) return "red";
   return "green"; // fallback
+}
+
+function translateZoneName(zoneName) {
+  // Переводим названия зон на русский
+  if (zoneName.includes("green")) return "Зелёная зона";
+  if (zoneName.includes("yellow_low")) return "Жёлтая зона (низкая)";
+  if (zoneName.includes("yellow_high")) return "Жёлтая зона (высокая)";
+  if (zoneName.includes("red")) return "Красная зона";
+  return zoneName; // fallback
 }
 
 function updatePriceScaleGradient(data) {
@@ -432,8 +485,8 @@ function renderZoneMarkers(data) {
   // Обновляем градиент в зависимости от зон
   updatePriceScaleGradient(data);
   
-  // Удаляем старые маркеры зон
-  const oldMarkers = scaleEl.querySelectorAll(".zone-marker");
+  // Удаляем старые маркеры зон и границы
+  const oldMarkers = scaleEl.querySelectorAll(".zone-marker, .zone-boundary");
   oldMarkers.forEach(m => m.remove());
   
   // Создаём маркеры для каждой зоны
@@ -448,9 +501,16 @@ function renderZoneMarkers(data) {
     marker.className = `zone-marker zone-${zoneColor}`;
     marker.style.left = `${minPos}%`;
     marker.style.width = `${maxPos - minPos}%`;
-    marker.title = `${zone.zone_name}: ${zone.price_range.min.toFixed(0)}-${zone.price_range.max.toFixed(0)}₽ (${zone.metrics.avg_probability_percent.toFixed(1)}%)`;
+    marker.title = `${translateZoneName(zone.zone_name)}: ${zone.price_range.min.toFixed(0)}-${zone.price_range.max.toFixed(0)}₽ (${zone.metrics.avg_probability_percent.toFixed(1)}%)`;
     
     scaleEl.appendChild(marker);
+    
+    // Добавляем визуальную границу в конце зоны
+    const boundary = document.createElement("div");
+    boundary.className = "zone-boundary";
+    boundary.style.left = `${maxPos}%`;
+    boundary.title = `Граница зоны: ${zone.price_range.max.toFixed(0)}₽`;
+    scaleEl.appendChild(boundary);
   });
   
   // Если зон меньше 5, всё что после последней зоны - красная зона
@@ -535,9 +595,8 @@ function getPriceData(price) {
     const interpolatedProb = interpolateProbability(price, foundZone, prevZone, nextZone);
     const zoneColor = extractZoneColor(foundZone.zone_name);
     
-    // Интерполируем expected_value пропорционально
-    const avgEV = Number(foundZone.metrics.avg_expected_value);
-    const expectedValue = (price - state.order.price_start_local) * (interpolatedProb / 100);
+    // Правильный расчет ожидаемой выгоды: цена * вероятность принятия
+    const expectedValue = price * (interpolatedProb / 100);
     
     return {
       price,
@@ -623,53 +682,71 @@ function updatePointerAndDisplay(price) {
     ).textContent = `Ожид. Выгода: ${data.expected_value.toFixed(2)} ₽`;
   }
   
-  // Обновляем метки min/avg/max в зависимости от текущей зоны
-  updatePriceLabels(boundedPrice);
-  
   // Обновляем кнопку "Принять за"
   updateAcceptButton();
 }
 
-function updatePriceLabels(currentPrice) {
-  if (!state.data || !state.data.zones) return;
-  
-  const labelMinEl = document.getElementById("label-min-price");
-  const labelAvgEl = document.getElementById("label-avg-price");
-  const labelMaxEl = document.getElementById("label-max-price");
-  
-  if (!labelMinEl || !labelAvgEl || !labelMaxEl) return;
-  
-  // Всегда показываем общие границы min-max
-  const firstZone = state.data.zones[0];
-  const lastZone = state.data.zones[state.data.zones.length - 1];
-  
-  labelMinEl.textContent = `${formatCurrency(firstZone.price_range.min)} (Мин)`;
-  labelAvgEl.textContent = `${formatCurrency((firstZone.price_range.min + lastZone.price_range.max) / 2)}`;
-  labelMaxEl.textContent = `${formatCurrency(lastZone.price_range.max)} (Макс)`;
-}
 
 function createRecommendationsTable(data) {
   const tbody = document.getElementById("recommendations-body");
   tbody.innerHTML = "";
 
-  (data.zones || [])
+  // Сортируем существующие зоны
+  const existingZones = (data.zones || [])
     .slice()
-    .sort((a, b) => a.zone_id - b.zone_id)
-    .forEach((zone) => {
-      const tr = document.createElement("tr");
-      const zoneColor = extractZoneColor(zone.zone_name);
-      const zoneClass = `zone-${zoneColor}`;
+    .sort((a, b) => a.zone_id - b.zone_id);
+  
+  // Определяем, какие зоны есть
+  const zoneMap = new Map();
+  existingZones.forEach(zone => {
+    zoneMap.set(zone.zone_id, zone);
+  });
+  
+  // Определяем границы для пустых зон
+  const lastZone = existingZones.length > 0 ? existingZones[existingZones.length - 1] : null;
+  const extendedMax = lastZone ? lastZone.price_range.max + 50 : state.priceMax;
+  
+  // Список всех возможных зон с их метаданными
+  const allPossibleZones = [
+    { id: 3, name: "zone_3_green", label: "Зелёная зона", color: "green", description: "≥70% вероятность" },
+    { id: 2, name: "zone_2_yellow_low", label: "Жёлтая зона (низкая)", color: "yellow", description: "50-70% вероятность" },
+    { id: 1, name: "zone_1_yellow_high", label: "Жёлтая зона (высокая)", color: "yellow", description: "30-50% вероятность" },
+    { id: 0, name: "zone_0_red", label: "Красная зона", color: "red", description: "<30% вероятность" }
+  ];
 
+  // Отображаем все зоны (существующие и пустые)
+  allPossibleZones.forEach((zoneInfo) => {
+    const tr = document.createElement("tr");
+    const zoneClass = `zone-${zoneInfo.color}`;
+    
+    if (zoneMap.has(zoneInfo.id)) {
+      // Зона существует - показываем данные
+      const zone = zoneMap.get(zoneInfo.id);
       tr.innerHTML = `
-        <td class="${zoneClass}">${zone.zone_name} (ID: ${zone.zone_id})</td>
-        <td>${zone.price_range.min.toFixed(2)} - ${zone.price_range.max.toFixed(2)}</td>
+        <td class="${zoneClass}">${translateZoneName(zone.zone_name)} (ID: ${zone.zone_id})</td>
+        <td>${zone.price_range.min.toFixed(2)} - ${zone.price_range.max.toFixed(2)}₽</td>
         <td>${zone.metrics.avg_probability_percent.toFixed(2)}%</td>
-        <td>${zone.metrics.avg_expected_value.toFixed(2)}</td>
+        <td>${zone.metrics.avg_expected_value.toFixed(2)}₽</td>
         <td>${zone.metrics.avg_normalized_probability_percent.toFixed(2)}%</td>
       `;
+    } else {
+      // Зона отсутствует - показываем как пустую с пояснением
+      const priceHint = lastZone && zoneInfo.id < 3 
+        ? `>${lastZone.price_range.max.toFixed(0)}₽` 
+        : "—";
+      
+      tr.innerHTML = `
+        <td class="${zoneClass}" style="opacity: 0.5;">${zoneInfo.label} (ID: ${zoneInfo.id})</td>
+        <td style="opacity: 0.5;">${priceHint}</td>
+        <td style="opacity: 0.5;">—</td>
+        <td style="opacity: 0.5;">—</td>
+        <td style="opacity: 0.5;"><em>${zoneInfo.description}</em></td>
+      `;
+      tr.title = "Эта зона отсутствует в данном диапазоне цен";
+    }
 
-      tbody.appendChild(tr);
-    });
+    tbody.appendChild(tr);
+  });
 }
 
 function refreshAnalysisModal() {
@@ -692,7 +769,7 @@ function refreshAnalysisModal() {
   if (optimal.zone_id && state.data.zones) {
     const optimalZone = state.data.zones.find(z => z.zone_id === optimal.zone_id);
     if (optimalZone) {
-      zoneLabel = optimalZone.zone_name;
+      zoneLabel = translateZoneName(optimalZone.zone_name);
       zoneColor = extractZoneColor(optimalZone.zone_name);
     }
   }
@@ -706,11 +783,22 @@ function refreshAnalysisModal() {
   )} ₽`;
   document.getElementById("max-prob").textContent = `${analysis.max_probability_percent.toFixed(2)}%`;
 
-  // Обновляем описание нормализации с актуальными данными
-  const normDesc = document.getElementById("normalization-description");
-  if (normDesc) {
-    normDesc.innerHTML = `Нормализованная вероятность (0-100%) показывает, насколько выбранная зона близка к
-      <strong>максимально достижимой вероятности</strong> для этого заказа (${analysis.max_probability_percent.toFixed(2)}% при ${analysis.max_probability_price.toFixed(0)}₽).`;
+  // Обновляем описание с актуальными данными
+  const optimalPrice = optimal.price.toFixed(0);
+  const optimalProb = optimal.probability_percent.toFixed(0);
+  const optimalBenefit = optimal.expected_value.toFixed(0);
+  const maxProbPrice = analysis.max_probability_price.toFixed(0);
+  const maxProb = analysis.max_probability_percent.toFixed(0);
+  
+  const descriptionEl = document.getElementById("normalization-description");
+  if (descriptionEl) {
+    descriptionEl.innerHTML = `
+      Оптимальная цена максимизирует <strong>ожидаемую выгоду</strong> = цена × вероятность принятия. 
+      Например: цена ${optimalPrice}₽ с вероятностью ${optimalProb}% даёт выгоду ${optimalBenefit}₽, 
+      а цена с максимальной вероятностью ${maxProbPrice}₽ (${maxProb}%) — только ${(maxProbPrice * maxProb / 100).toFixed(0)}₽.
+      <br><br>
+      <strong>Нормализованная вероятность</strong> показывает, насколько близка зона к максимально достижимой вероятности для этого заказа.
+    `;
   }
 
   createRecommendationsTable(state.data);
@@ -982,15 +1070,56 @@ function closeModal() {
   logAction("Detailed Analysis Modal Closed");
 }
 
+function showFromLocationModal() {
+  document.getElementById("from-location-modal").style.display = "block";
+  logAction("From Location Modal Opened");
+}
+
+function closeFromLocationModal() {
+  document.getElementById("from-location-modal").style.display = "none";
+  logAction("From Location Modal Closed");
+}
+
+function showToLocationModal() {
+  document.getElementById("to-location-modal").style.display = "block";
+  logAction("To Location Modal Opened");
+}
+
+function closeToLocationModal() {
+  document.getElementById("to-location-modal").style.display = "none";
+  logAction("To Location Modal Closed");
+}
+
 function wireGlobalHandlers() {
   window.openMenu = openMenu;
   window.exitOrder = exitOrder;
   window.toggleTheme = toggleTheme;
+  
+  // Обработчик для закрытия модальных окон при клике вне их
+  window.onclick = function(event) {
+    const analysisModal = document.getElementById("analysis-modal");
+    const fromLocationModal = document.getElementById("from-location-modal");
+    const toLocationModal = document.getElementById("to-location-modal");
+    
+    if (event.target === analysisModal) {
+      closeModal();
+    }
+    if (event.target === fromLocationModal) {
+      closeFromLocationModal();
+    }
+    if (event.target === toLocationModal) {
+      closeToLocationModal();
+    }
+  };
   window.changePrice = changePrice;
   window.acceptCurrentPrice = acceptCurrentPrice;
   window.setOptimalPrice = setOptimalPrice;
   window.showAnalysis = showAnalysis;
   window.closeModal = closeModal;
+  window.showFromLocationModal = showFromLocationModal;
+  window.closeFromLocationModal = closeFromLocationModal;
+  window.showToLocationModal = showToLocationModal;
+  window.closeToLocationModal = closeToLocationModal;
   window.logAction = logAction;
   window.applyJsonOverride = applyJsonOverride;
   window.clearJsonEditor = clearJsonEditor;
