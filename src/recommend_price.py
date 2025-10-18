@@ -204,31 +204,21 @@ def find_optimal_price(order_data, model, num_points=500):
     max_prob_idx = np.argmax(probabilities)
     max_prob_price = prices[max_prob_idx]
     
-    sorted_indices = np.argsort(valid_expected_values)[::-1]
+    # Определяем зоны на основе ВЕРОЯТНОСТИ принятия, а не EV
+    # Это гарантирует, что цвета привязаны к шансам принятия цены
     
-    num_zones = 4
-    zone_size = len(sorted_indices) // num_zones
     zones = []
-    zone_configs = [
-        {'id': 1, 'name': 'zone_1_red_low'},
-        {'id': 2, 'name': 'zone_2_yellow_low'},
-        {'id': 3, 'name': 'zone_3_green'},
-        {'id': 4, 'name': 'zone_4_yellow_high'}
-    ]
     
-    for i in range(num_zones):
-        start_idx = i * zone_size
-        end_idx = (i + 1) * zone_size if i < num_zones - 1 else len(sorted_indices)
-        zone_indices = sorted_indices[start_idx:end_idx]
-        
-        zone_prices = valid_prices[zone_indices]
-        zone_probs = valid_probs[zone_indices]
-        zone_normalized_probs = valid_normalized_probs[zone_indices]
-        zone_expected_values = valid_expected_values[zone_indices]
-        
+    # Зелёная зона: высокая вероятность принятия (> 70%)
+    green_mask = valid_probs >= 0.70
+    if green_mask.any():
+        zone_prices = valid_prices[green_mask]
+        zone_probs = valid_probs[green_mask]
+        zone_normalized_probs = valid_normalized_probs[green_mask]
+        zone_expected_values = valid_expected_values[green_mask]
         zones.append({
-            'zone_id': zone_configs[i]['id'],
-            'zone_name': zone_configs[i]['name'],
+            'zone_id': 3,
+            'zone_name': 'zone_3_green',
             'price_range': {
                 'min': round(float(zone_prices.min()), 2),
                 'max': round(float(zone_prices.max()), 2)
@@ -240,18 +230,90 @@ def find_optimal_price(order_data, model, num_points=500):
             }
         })
     
+    # Жёлтая низкая зона: средняя вероятность (50-70%)
+    yellow_low_mask = (valid_probs >= 0.50) & (valid_probs < 0.70)
+    if yellow_low_mask.any():
+        zone_prices = valid_prices[yellow_low_mask]
+        zone_probs = valid_probs[yellow_low_mask]
+        zone_normalized_probs = valid_normalized_probs[yellow_low_mask]
+        zone_expected_values = valid_expected_values[yellow_low_mask]
+        zones.append({
+            'zone_id': 2,
+            'zone_name': 'zone_2_yellow_low',
+            'price_range': {
+                'min': round(float(zone_prices.min()), 2),
+                'max': round(float(zone_prices.max()), 2)
+            },
+            'metrics': {
+                'avg_probability_percent': round(float(zone_probs.mean() * 100), 2),
+                'avg_normalized_probability_percent': round(float(zone_normalized_probs.mean() * 100), 2),
+                'avg_expected_value': round(float(zone_expected_values.mean()), 2)
+            }
+        })
+    
+    # Жёлтая высокая зона: ниже средней вероятности (30-50%)
+    yellow_high_mask = (valid_probs >= 0.30) & (valid_probs < 0.50)
+    if yellow_high_mask.any():
+        zone_prices = valid_prices[yellow_high_mask]
+        zone_probs = valid_probs[yellow_high_mask]
+        zone_normalized_probs = valid_normalized_probs[yellow_high_mask]
+        zone_expected_values = valid_expected_values[yellow_high_mask]
+        zones.append({
+            'zone_id': 4,
+            'zone_name': 'zone_4_yellow_high',
+            'price_range': {
+                'min': round(float(zone_prices.min()), 2),
+                'max': round(float(zone_prices.max()), 2)
+            },
+            'metrics': {
+                'avg_probability_percent': round(float(zone_probs.mean() * 100), 2),
+                'avg_normalized_probability_percent': round(float(zone_normalized_probs.mean() * 100), 2),
+                'avg_expected_value': round(float(zone_expected_values.mean()), 2)
+            }
+        })
+    
+    # Красная зона: низкая вероятность принятия (< 30%)
+    red_mask = valid_probs < 0.30
+    if red_mask.any():
+        zone_prices = valid_prices[red_mask]
+        zone_probs = valid_probs[red_mask]
+        zone_normalized_probs = valid_normalized_probs[red_mask]
+        zone_expected_values = valid_expected_values[red_mask]
+        zones.append({
+            'zone_id': 1,
+            'zone_name': 'zone_1_red_low',
+            'price_range': {
+                'min': round(float(zone_prices.min()), 2),
+                'max': round(float(zone_prices.max()), 2)
+            },
+            'metrics': {
+                'avg_probability_percent': round(float(zone_probs.mean() * 100), 2),
+                'avg_normalized_probability_percent': round(float(zone_normalized_probs.mean() * 100), 2),
+                'avg_expected_value': round(float(zone_expected_values.mean()), 2)
+            }
+        })
+    
+    # Сортируем зоны по минимальной цене для удобства отображения
     zones.sort(key=lambda x: x['price_range']['min'])
     
-    for i in range(len(zones) - 1):
-        zones[i]['price_range']['max'] = zones[i + 1]['price_range']['min']
-    
+    # Определяем, в какую зону попадает оптимальная цена по вероятности
     optimal_zone_id = None
-    for zone in zones:
-        if zone['price_range']['min'] <= optimal_price <= zone['price_range']['max']:
-            optimal_zone_id = zone['zone_id']
-            break
-    if optimal_zone_id is None:
-        optimal_zone_id = zones[0]['zone_id']
+    if optimal_prob >= 0.70:
+        optimal_zone_id = 3  # Зелёная зона
+    elif optimal_prob >= 0.50:
+        optimal_zone_id = 2  # Жёлтая низкая
+    elif optimal_prob >= 0.30:
+        optimal_zone_id = 4  # Жёлтая высокая
+    else:
+        optimal_zone_id = 1  # Красная зона
+    
+    # Если зона не была создана (нет цен в этом диапазоне), найдем ближайшую
+    if not any(z['zone_id'] == optimal_zone_id for z in zones):
+        if len(zones) > 0:
+            # Выбираем зону с наибольшей средней вероятностью
+            optimal_zone_id = max(zones, key=lambda z: z['metrics']['avg_probability_percent'])['zone_id']
+        else:
+            optimal_zone_id = 3  # По умолчанию зелёная
     
     result = {
         'zones': zones,
@@ -261,6 +323,12 @@ def find_optimal_price(order_data, model, num_points=500):
             'normalized_probability_percent': round(float(optimal_normalized_prob * 100), 2),
             'expected_value': round(float(optimal_expected_value), 2),
             'zone_id': optimal_zone_id
+        },
+        'zone_thresholds': {
+            'green_zone': '≥70% вероятность принятия',
+            'yellow_low_zone': '50-70% вероятность принятия',
+            'yellow_high_zone': '30-50% вероятность принятия',
+            'red_zone': '<30% вероятность принятия'
         },
         'analysis': {
             'start_price': float(user_min_price),

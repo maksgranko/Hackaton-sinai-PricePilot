@@ -87,9 +87,18 @@ class Recommendation(BaseModel):
     avg_expected_value: float = Field(..., ge=0)
 
 
+class ZoneThresholds(BaseModel):
+    """Пороги вероятности для определения зон"""
+    green_zone: str
+    yellow_low_zone: str
+    yellow_high_zone: str
+    red_zone: str
+
+
 class ModelResponse(BaseModel):
     zones: List[Zone]
     optimal_price: OptimalPrice
+    zone_thresholds: Optional[ZoneThresholds] = None
     analysis: ModelAnalysis
 
 
