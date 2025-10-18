@@ -1,20 +1,17 @@
-# Используем официальный образ Python 3.12
-FROM python:3.12-slim
+FROM python:3.13-slim
 
-# Устанавливаем рабочую директорию в контейнере
 WORKDIR /app
 
-# Копируем все файлы проекта в контейнер
-COPY . .
+COPY requirements.txt .
 
-# Устанавливаем зависимости
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Создаем пустой __init__.py в src для корректной работы импортов
+COPY . .
+
 RUN touch src/__init__.py
 
-# Устанавливаем PYTHONPATH
 ENV PYTHONPATH=/app
 
-# Запускаем скрипт при старте контейнера
-CMD ["python", "main.py"]
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
