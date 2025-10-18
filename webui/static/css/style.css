@@ -692,6 +692,72 @@ h3 {
   background-color: rgba(52, 152, 219, 0.1);
 }
 
+.fuel-economics-panel {
+  display: flex;
+  gap: 12px;
+  margin: 15px 0 25px 0;
+  padding: 15px;
+  background-color: var(--bg-color);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.fuel-metric {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background-color: var(--container-bg);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.fuel-metric:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.fuel-metric i {
+  font-size: 24px;
+  color: var(--info-color);
+  min-width: 24px;
+}
+
+.fuel-metric-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fuel-metric-label {
+  font-size: 11px;
+  color: var(--text-color);
+  opacity: 0.6;
+  text-transform: uppercase;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+
+.fuel-metric-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-color);
+  line-height: 1.2;
+}
+
+.fuel-metric-detail {
+  font-size: 10px;
+  color: var(--text-color);
+  opacity: 0.5;
+}
+
+@media (max-width: 768px) {
+  .fuel-economics-panel {
+    flex-direction: column;
+  }
+}
+
 /* Debug panel */
 .debug-overlay {
   position: absolute;

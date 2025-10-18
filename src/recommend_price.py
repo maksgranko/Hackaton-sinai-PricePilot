@@ -5,6 +5,30 @@ import json
 import os
 from datetime import datetime
 
+def calculate_fuel_cost(distance_in_meters, fuel_consumption_per_100km=9.0, fuel_price_per_liter=55.0):
+    """
+    Рассчитывает стоимость топлива для поездки.
+    
+    Args:
+        distance_in_meters: расстояние в метрах
+        fuel_consumption_per_100km: расход топлива на 100 км (по умолчанию 9 л)
+        fuel_price_per_liter: цена за литр топлива в рублях (по умолчанию 55 ₽)
+    
+    Returns:
+        dict с информацией о расходе топлива
+    """
+    distance_km = distance_in_meters / 1000.0
+    fuel_liters = (distance_km * fuel_consumption_per_100km) / 100.0
+    fuel_cost = fuel_liters * fuel_price_per_liter
+    
+    return {
+        'fuel_liters': round(fuel_liters, 2),
+        'fuel_cost_rub': round(fuel_cost, 2),
+        'distance_km': round(distance_km, 2),
+        'fuel_price_per_liter': fuel_price_per_liter,
+        'consumption_per_100km': fuel_consumption_per_100km
+    }
+
 def detect_taxi_type(carname, carmodel):
     carname = str(carname).strip()
     carmodel = str(carmodel).strip()
@@ -136,6 +160,39 @@ def build_features_for_price(order_data, price_bid, reference_price):
     features['speed_x_peak'] = features['avg_speed_kmh'] * features['is_peak_hour']
     features['rating_x_price_inc'] = features['driver_rating'] * features['price_increase_pct']
     features['experience_x_price_inc'] = features['driver_experience_years'] * features['price_increase_pct']
+    
+    # ⛽ НОВЫЕ ПРИЗНАКИ: Экономика топлива
+    # Расчет стоимости топлива для поездки
+    fuel_info = calculate_fuel_cost(order_data['distance_in_meters'])
+    features['fuel_cost_rub'] = fuel_info['fuel_cost_rub']
+    features['fuel_liters'] = fuel_info['fuel_liters']
+    
+    # Отношение цены к стоимости топлива - ключевой показатель рентабельности
+    features['price_to_fuel_ratio'] = price_bid / (fuel_info['fuel_cost_rub'] + 0.1)
+    
+    # Минимальная рентабельная цена (топливо + 30%)
+    min_profitable = fuel_info['fuel_cost_rub'] * 1.3
+    features['min_profitable_price'] = min_profitable
+    
+    # Насколько текущая цена выше/ниже минимальной рентабельной
+    features['price_above_min_profitable'] = price_bid - min_profitable
+    features['price_above_min_profitable_pct'] = ((price_bid - min_profitable) / min_profitable * 100) if min_profitable > 0 else 0
+    
+    # Флаги для категорий рентабельности
+    features['is_highly_profitable'] = float(price_bid >= min_profitable * 2)  # Цена >= 2× минимума
+    features['is_profitable'] = float(price_bid >= min_profitable)  # Цена >= минимума
+    features['is_unprofitable'] = float(price_bid < min_profitable)  # Цена < минимума
+    
+    # Чистая прибыль от ставки (цена - топливо)
+    features['net_profit'] = price_bid - fuel_info['fuel_cost_rub']
+    features['net_profit_per_km'] = features['net_profit'] / (features['distance_km'] + 0.1)
+    features['net_profit_per_minute'] = features['net_profit'] / (features['duration_min'] + 0.1)
+    
+    # Взаимодействия топлива с другими признаками
+    features['fuel_ratio_x_distance'] = features['price_to_fuel_ratio'] * features['distance_km']
+    features['fuel_ratio_x_peak'] = features['price_to_fuel_ratio'] * features['is_peak_hour']
+    features['net_profit_x_rating'] = features['net_profit'] * features['driver_rating']
+    
     result = pd.DataFrame([features])
     return result
 
@@ -261,6 +318,16 @@ def find_optimal_price(order_data, model, num_points=500):
         else:
             optimal_zone_id = 3  # По умолчанию зелёная
     
+    # Рассчитываем стоимость топлива
+    fuel_info = calculate_fuel_cost(order_data['distance_in_meters'])
+    
+    # Рассчитываем минимальную рентабельную цену (топливо + минимальная маржа)
+    # Добавляем 30% к стоимости топлива как минимальную компенсацию
+    min_profitable_price = fuel_info['fuel_cost_rub'] * 1.3
+    
+    # Рассчитываем чистую выгоду от оптимальной цены
+    net_profit_optimal = optimal_expected_value - fuel_info['fuel_cost_rub']
+    
     result = {
         'zones': zones,
         'optimal_price': {
@@ -268,13 +335,23 @@ def find_optimal_price(order_data, model, num_points=500):
             'probability_percent': round(float(optimal_prob * 100), 2),
             'normalized_probability_percent': round(float(optimal_normalized_prob * 100), 2),
             'expected_value': round(float(optimal_expected_value), 2),
-            'zone_id': optimal_zone_id
+            'zone_id': optimal_zone_id,
+            'net_profit': round(float(net_profit_optimal), 2)
         },
         'zone_thresholds': {
             'green_zone': '≥70% вероятность принятия',
             'yellow_low_zone': '50-70% вероятность принятия',
             'yellow_high_zone': '30-50% вероятность принятия',
             'red_zone': '<30% вероятность принятия'
+        },
+        'fuel_economics': {
+            'fuel_cost': fuel_info['fuel_cost_rub'],
+            'fuel_liters': fuel_info['fuel_liters'],
+            'distance_km': fuel_info['distance_km'],
+            'fuel_price_per_liter': fuel_info['fuel_price_per_liter'],
+            'consumption_per_100km': fuel_info['consumption_per_100km'],
+            'min_profitable_price': round(min_profitable_price, 2),
+            'net_profit_from_optimal': round(float(net_profit_optimal), 2)
         },
         'analysis': {
             'start_price': float(user_min_price),

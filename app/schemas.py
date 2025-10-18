@@ -52,6 +52,7 @@ class OptimalPrice(BaseModel):
     normalized_probability_percent: float = Field(..., ge=0, le=100)
     expected_value: float = Field(..., ge=0)
     zone_id: int = Field(..., ge=0)
+    net_profit: float = Field(..., description="Чистая прибыль после вычета топлива")
 
 
 class ScanRange(BaseModel):
@@ -92,10 +93,22 @@ class ZoneThresholds(BaseModel):
     red_zone: str
 
 
+class FuelEconomics(BaseModel):
+    """Экономика топлива для поездки"""
+    fuel_cost: float = Field(..., ge=0, description="Стоимость топлива в рублях")
+    fuel_liters: float = Field(..., ge=0, description="Расход топлива в литрах")
+    distance_km: float = Field(..., ge=0, description="Расстояние в километрах")
+    fuel_price_per_liter: float = Field(..., ge=0, description="Цена за литр топлива")
+    consumption_per_100km: float = Field(..., ge=0, description="Расход на 100 км")
+    min_profitable_price: float = Field(..., ge=0, description="Минимальная рентабельная цена")
+    net_profit_from_optimal: float = Field(..., description="Чистая прибыль от оптимальной цены")
+
+
 class ModelResponse(BaseModel):
     zones: List[Zone]
     optimal_price: OptimalPrice
     zone_thresholds: Optional[ZoneThresholds] = None
+    fuel_economics: FuelEconomics
     analysis: ModelAnalysis
 
 

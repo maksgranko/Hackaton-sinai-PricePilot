@@ -8,6 +8,28 @@ import joblib
 import warnings
 warnings.filterwarnings('ignore')
 
+def calculate_fuel_cost(distance_in_meters, fuel_consumption_per_100km=9.0, fuel_price_per_liter=55.0):
+    """
+    Рассчитывает стоимость топлива для поездки.
+    
+    Args:
+        distance_in_meters: расстояние в метрах
+        fuel_consumption_per_100km: расход топлива на 100 км (по умолчанию 9 л)
+        fuel_price_per_liter: цена за литр топлива в рублях (по умолчанию 55 ₽)
+    
+    Returns:
+        dict с информацией о расходе топлива
+    """
+    distance_km = distance_in_meters / 1000.0
+    fuel_liters = (distance_km * fuel_consumption_per_100km) / 100.0
+    fuel_cost = fuel_liters * fuel_price_per_liter
+    
+    return {
+        'fuel_liters': fuel_liters,
+        'fuel_cost_rub': fuel_cost,
+        'distance_km': distance_km
+    }
+
 def clean_and_validate_data(df, verbose=True, keep_only_done=False):
     initial_count = len(df)
     
@@ -271,6 +293,43 @@ def build_enhanced_features(frame):
     features['speed_x_peak'] = features['avg_speed_kmh'] * features['is_peak_hour']
     features['rating_x_price_inc'] = features['driver_rating'] * features['price_increase_pct']
     features['experience_x_price_inc'] = features['driver_experience_years'] * features['price_increase_pct']
+    
+    # ⛽ НОВЫЕ ПРИЗНАКИ: Экономика топлива
+    # Расчет стоимости топлива для каждой поездки (векторизованно)
+    distance_km = frame['distance_in_meters'].values / 1000.0
+    fuel_liters = (distance_km * 9.0) / 100.0  # 9 л на 100 км
+    fuel_cost = fuel_liters * 55.0  # 55 ₽ за литр
+    
+    features['fuel_cost_rub'] = fuel_cost
+    features['fuel_liters'] = fuel_liters
+    
+    # Отношение цены к стоимости топлива - ключевой показатель рентабельности
+    features['price_to_fuel_ratio'] = frame['price_bid_local'].values / (fuel_cost + 0.1)
+    
+    # Минимальная рентабельная цена (топливо + 30%)
+    min_profitable = fuel_cost * 1.3
+    features['min_profitable_price'] = min_profitable
+    
+    # Насколько текущая цена выше/ниже минимальной рентабельной
+    features['price_above_min_profitable'] = frame['price_bid_local'].values - min_profitable
+    features['price_above_min_profitable_pct'] = ((frame['price_bid_local'].values - min_profitable) / 
+                                                   (min_profitable + 0.1) * 100)
+    
+    # Флаги для категорий рентабельности
+    features['is_highly_profitable'] = (frame['price_bid_local'].values >= min_profitable * 2).astype(float)
+    features['is_profitable'] = (frame['price_bid_local'].values >= min_profitable).astype(float)
+    features['is_unprofitable'] = (frame['price_bid_local'].values < min_profitable).astype(float)
+    
+    # Чистая прибыль от ставки (цена - топливо)
+    net_profit = frame['price_bid_local'].values - fuel_cost
+    features['net_profit'] = net_profit
+    features['net_profit_per_km'] = net_profit / (distance_km + 0.1)
+    features['net_profit_per_minute'] = net_profit / (features['duration_min'] + 0.1)
+    
+    # Взаимодействия топлива с другими признаками
+    features['fuel_ratio_x_distance'] = features['price_to_fuel_ratio'] * features['distance_km']
+    features['fuel_ratio_x_peak'] = features['price_to_fuel_ratio'] * features['is_peak_hour']
+    features['net_profit_x_rating'] = net_profit * features['driver_rating']
     
     result = pd.DataFrame(features)
     

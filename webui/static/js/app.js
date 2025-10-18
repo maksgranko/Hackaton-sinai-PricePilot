@@ -800,8 +800,56 @@ function refreshAnalysisModal() {
       <strong>Нормализованная вероятность</strong> показывает, насколько близка зона к максимально достижимой вероятности для этого заказа.
     `;
   }
+  
+  // Обновляем информацию о топливе
+  updateFuelEconomics();
 
   createRecommendationsTable(state.data);
+}
+
+function updateFuelEconomics() {
+  if (!state.data || !state.data.fuel_economics) return;
+  
+  const fuel = state.data.fuel_economics;
+  const optimal = state.data.optimal_price;
+  
+  // Расход топлива
+  const fuelCostEl = document.getElementById("fuel-cost-value");
+  if (fuelCostEl) {
+    fuelCostEl.textContent = `${fuel.fuel_cost.toFixed(2)} ₽`;
+  }
+  
+  const fuelLitersEl = document.getElementById("fuel-liters-detail");
+  if (fuelLitersEl) {
+    fuelLitersEl.textContent = `${fuel.fuel_liters.toFixed(2)} л (${fuel.distance_km.toFixed(1)} км)`;
+  }
+  
+  // Минимальная рентабельная цена
+  const minProfitableEl = document.getElementById("min-profitable-value");
+  if (minProfitableEl) {
+    minProfitableEl.textContent = `${fuel.min_profitable_price.toFixed(2)} ₽`;
+  }
+  
+  // Чистая выгода
+  const netProfitEl = document.getElementById("net-profit-value");
+  const netProfitDetailEl = document.getElementById("net-profit-detail");
+  if (netProfitEl && netProfitDetailEl) {
+    const netProfit = optimal.net_profit || (optimal.expected_value - fuel.fuel_cost);
+    netProfitEl.textContent = `${netProfit.toFixed(2)} ₽`;
+    
+    // Цвет в зависимости от выгоды
+    netProfitEl.className = "fuel-metric-value";
+    if (netProfit > fuel.fuel_cost * 2) {
+      netProfitEl.classList.add("zone-green");
+    } else if (netProfit > fuel.fuel_cost) {
+      netProfitEl.classList.add("zone-yellow");
+    } else {
+      netProfitEl.classList.add("zone-red");
+    }
+    
+    const profitMargin = ((netProfit / optimal.expected_value) * 100).toFixed(0);
+    netProfitDetailEl.textContent = `${profitMargin}% маржа`;
+  }
 }
 
 function applyDataToUi(data) {
