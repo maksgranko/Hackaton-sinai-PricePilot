@@ -116,7 +116,7 @@
 
         <div class="pricepilot-panel">
           <div class="button-group">
-            <button class="accept-button" id="accept-start-price-button">
+            <button class="accept-button" id="accept-start-price-button" onclick="acceptCurrentPrice()">
               Принять за 180₽
             </button>
             <button class="analysis-button" onclick="showAnalysis()">
@@ -126,8 +126,8 @@
 
           <div class="bid-section">
             <h4>
-              <span>Предложите свою цену:</span>
-              <span class="optimal-price-text" id="optimal-price-text"
+              <span>Рекомендуемая цена:</span>
+              <span class="optimal-price-text" id="optimal-price-text" onclick="setOptimalPrice()"
                 ><i class="fas fa-magic"></i>378₽</span
               >
             </h4>

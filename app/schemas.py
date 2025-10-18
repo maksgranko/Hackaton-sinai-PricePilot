@@ -18,7 +18,7 @@ class OrderRequest(BaseModel):
     duration_in_seconds: int = Field(..., ge=0)
     pickup_in_meters: int = Field(..., ge=0)
     pickup_in_seconds: int = Field(..., ge=0)
-    driver_rating: conint(ge=1, le=5) = Field(..., description="Rating on a 1-5 scale.")
+    driver_rating: confloat(ge=1.0, le=5.0) = Field(..., description="Rating on a 1.0-5.0 scale.")
     platform: PlatformEnum
     price_start_local: confloat(ge=0)
 

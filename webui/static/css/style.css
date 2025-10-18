@@ -55,6 +55,10 @@ body {
 .map-area {
   flex-grow: 1;
   background-color: var(--map-bg);
+  background-image: url('/assets/images/map.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
   position: relative;
   padding: 15px;
   color: white;
@@ -236,9 +240,22 @@ body {
 }
 
 .optimal-price-text {
-  color: var(--warning-color);
+  color: var(--drivee-green);
   font-weight: 700;
   font-size: 15px;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.1s;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.optimal-price-text:hover {
+  opacity: 0.8;
+  background-color: rgba(140, 198, 63, 0.1);
+}
+
+.optimal-price-text:active {
+  transform: scale(0.95);
 }
 
 .optimal-price-text i {

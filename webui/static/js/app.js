@@ -31,6 +31,9 @@ const BASE_ORDER = {
 if (BASE_ORDER.price_start_local != null) {
   BASE_ORDER.price_start_local = Number(BASE_ORDER.price_start_local);
 }
+if (BASE_ORDER.driver_rating != null) {
+  BASE_ORDER.driver_rating = parseFloat(BASE_ORDER.driver_rating);
+}
 if (BASE_ORDER.carname == null) {
   BASE_ORDER.carname = "";
 }
@@ -125,6 +128,20 @@ function setDebugStatus(elementId, message, variant = "") {
 }
 
 function computePriceBoundsFromData(data) {
+  // Если есть зоны - используем их границы
+  if (data?.zones && data.zones.length > 0) {
+    const firstZone = data.zones[0];
+    const lastZone = data.zones[data.zones.length - 1];
+    
+    const min = Number(firstZone.price_range.min);
+    const max = Number(lastZone.price_range.max);
+    const stepCandidate = Number(data?.analysis?.price_increment ?? state.priceStep ?? 5);
+    const step = stepCandidate > 0 ? stepCandidate : 5;
+    
+    return { min, max, step };
+  }
+  
+  // Fallback на старую логику, если зон нет
   const rawMin =
     data?.analysis?.scan_range?.min ?? data?.analysis?.start_price ?? state.priceMin ?? 0;
   const rawMax = data?.analysis?.scan_range?.max;
@@ -214,6 +231,7 @@ async function applyJsonOverride() {
     if (state.order.carname == null) {
       state.order.carname = "";
     }
+    console.log("📊 JSON override applied. driver_rating:", state.order.driver_rating, "type:", typeof state.order.driver_rating);
     setDebugStatus("debug-json-status", "JSON overrides applied.", "success");
     logAction("JSON override applied via debugger.");
     const targetPrice =
@@ -296,13 +314,11 @@ function updateClientDetailsFromOrder() {
 
 function hydrateSummaryPanels(data) {
   const optimal = data.optimal_price;
-  const analysis = data.analysis;
-
-  document.getElementById("accept-start-price-button").textContent = `Принять за ${formatCurrency(
-    analysis.start_price
-  )}`;
   
-  // Обновляем метки min/max цены в зависимости от зон
+  // Сохраняем оптимальную цену в state для использования в setOptimalPrice
+  state.optimalPrice = Math.round(optimal.price / state.priceStep) * state.priceStep;
+  
+  // Обновляем метки min/max цены - показываем общие границы
   if (data.zones && data.zones.length > 0) {
     const firstZone = data.zones[0];
     const lastZone = data.zones[data.zones.length - 1];
@@ -319,7 +335,7 @@ function hydrateSummaryPanels(data) {
   } else {
     document.getElementById("label-min-price").textContent = `${formatCurrency(
       state.priceMin
-    )} (Мин)`;
+    )} (Мін)`;
     document.getElementById("label-avg-price").textContent = `${formatCurrency(
       (state.priceMin + state.priceMax) / 2
     )}`;
@@ -328,10 +344,9 @@ function hydrateSummaryPanels(data) {
     )} (Макс)`;
   }
 
-  const optimalPriceRounded = Math.round(optimal.price / state.priceStep) * state.priceStep;
   document.getElementById(
     "optimal-price-text"
-  ).innerHTML = `<i class="fas fa-magic"></i>${optimalPriceRounded}₽`;
+  ).innerHTML = `<i class="fas fa-magic"></i>${state.optimalPrice}₽`;
   
   renderZoneMarkers(data);
 }
@@ -366,7 +381,7 @@ function renderZoneMarkers(data) {
     marker.className = `zone-marker zone-${zoneColor}`;
     marker.style.left = `${minPos}%`;
     marker.style.width = `${maxPos - minPos}%`;
-    marker.title = `${zone.zone_name.toUpperCase()}: ${zone.price_range.min.toFixed(0)}-${zone.price_range.max.toFixed(0)}₽ (${zone.metrics.avg_probability_percent.toFixed(1)}%)`;
+    marker.title = `${zone.zone_name}: ${zone.price_range.min.toFixed(0)}-${zone.price_range.max.toFixed(0)}₽ (${zone.metrics.avg_probability_percent.toFixed(1)}%)`;
     
     scaleEl.appendChild(marker);
   });
@@ -414,35 +429,48 @@ function getPriceData(price) {
     }
   }
   
-  // Если зона найдена, используем её данные
+  // Если зона найдена, используем её данные с нормализованной вероятностью
   if (foundZone) {
     const zoneColor = extractZoneColor(foundZone.zone_name);
     return {
       price,
-      probability: Number(foundZone.metrics.avg_probability_percent),
+      probability: Number(foundZone.metrics.avg_normalized_probability_percent),
       expected_value: Number(foundZone.metrics.avg_expected_value),
       zone: zoneColor,
     };
   }
   
-  // Если цена вне всех зон или зон нет, используем оптимальную цену как fallback
-  const fallback = state.data.optimal_price;
-  let fallbackZone = "green";
-  
-  // Если цена больше максимальной зоны - красная
+  // Если цена вне всех зон (красная зона) - используем низкую вероятность
   if (state.data.zones && state.data.zones.length > 0) {
     const lastZone = state.data.zones[state.data.zones.length - 1];
     if (price > lastZone.price_range.max) {
-      fallbackZone = "red";
+      return {
+        price,
+        probability: 10, // 10% для красной зоны
+        expected_value: price * 0.1,
+        zone: "red",
+      };
     }
   }
   
+  // Fallback - если что-то пошло не так
+  const fallback = state.data.optimal_price;
   return {
     price,
-    probability: Number(fallback.probability_percent || 0),
+    probability: Number(fallback.normalized_probability_percent || fallback.probability_percent || 0),
     expected_value: Number(fallback.expected_value || 0),
-    zone: fallbackZone,
+    zone: "green",
   };
+}
+
+function updateAcceptButton() {
+  const currentPrice = parseInt(priceInput.value, 10);
+  if (!Number.isNaN(currentPrice)) {
+    const acceptButton = document.getElementById("accept-start-price-button");
+    if (acceptButton) {
+      acceptButton.textContent = `Принять за ${formatCurrency(currentPrice)}`;
+    }
+  }
 }
 
 function updatePointerAndDisplay(price) {
@@ -467,6 +495,30 @@ function updatePointerAndDisplay(price) {
       "current-bid-expected-value"
     ).textContent = `Ожид. Выгода: ${data.expected_value.toFixed(2)} ₽`;
   }
+  
+  // Обновляем метки min/avg/max в зависимости от текущей зоны
+  updatePriceLabels(boundedPrice);
+  
+  // Обновляем кнопку "Принять за"
+  updateAcceptButton();
+}
+
+function updatePriceLabels(currentPrice) {
+  if (!state.data || !state.data.zones) return;
+  
+  const labelMinEl = document.getElementById("label-min-price");
+  const labelAvgEl = document.getElementById("label-avg-price");
+  const labelMaxEl = document.getElementById("label-max-price");
+  
+  if (!labelMinEl || !labelAvgEl || !labelMaxEl) return;
+  
+  // Всегда показываем общие границы min-max
+  const firstZone = state.data.zones[0];
+  const lastZone = state.data.zones[state.data.zones.length - 1];
+  
+  labelMinEl.textContent = `${formatCurrency(firstZone.price_range.min)} (Мин)`;
+  labelAvgEl.textContent = `${formatCurrency((firstZone.price_range.min + lastZone.price_range.max) / 2)}`;
+  labelMaxEl.textContent = `${formatCurrency(lastZone.price_range.max)} (Макс)`;
 }
 
 function createRecommendationsTable(data) {
@@ -482,7 +534,7 @@ function createRecommendationsTable(data) {
       const zoneClass = `zone-${zoneColor}`;
 
       tr.innerHTML = `
-        <td class="${zoneClass}">${zone.zone_name.toUpperCase()} (ID: ${zone.zone_id})</td>
+        <td class="${zoneClass}">${zone.zone_name} (ID: ${zone.zone_id})</td>
         <td>${zone.price_range.min.toFixed(2)} - ${zone.price_range.max.toFixed(2)}</td>
         <td>${zone.metrics.avg_probability_percent.toFixed(2)}%</td>
         <td>${zone.metrics.avg_expected_value.toFixed(2)}</td>
@@ -513,7 +565,7 @@ function refreshAnalysisModal() {
   if (optimal.zone_id && state.data.zones) {
     const optimalZone = state.data.zones.find(z => z.zone_id === optimal.zone_id);
     if (optimalZone) {
-      zoneLabel = optimalZone.zone_name.toUpperCase();
+      zoneLabel = optimalZone.zone_name;
       zoneColor = extractZoneColor(optimalZone.zone_name);
     }
   }
@@ -600,13 +652,12 @@ function bindPointerEvents() {
     event.preventDefault();
   });
 
-  document.addEventListener("mouseup", async () => {
+  document.addEventListener("mouseup", () => {
     if (isDragging) {
       isDragging = false;
       pricePointer.classList.remove("dragging");
       const price = parseInt(priceInput.value, 10);
       logAction(`Price Bid set manually via slider to: ${price} ₽`);
-      await activeBidUpdate(price);
     }
   });
 
@@ -626,13 +677,12 @@ function bindPointerEvents() {
     { passive: true }
   );
 
-  document.addEventListener("touchend", async () => {
+  document.addEventListener("touchend", () => {
     if (isDragging) {
       isDragging = false;
       pricePointer.classList.remove("dragging");
       const price = parseInt(priceInput.value, 10);
       logAction(`Price Bid set manually via slider (Touch) to: ${price} ₽`);
-      await activeBidUpdate(price);
     }
   });
 
@@ -659,14 +709,43 @@ function bindInputEvents() {
   });
 }
 
-async function acceptStartPrice() {
+function setOptimalPrice() {
+  if (!state.ready || !state.optimalPrice) return;
+  
+  updatePointerAndDisplay(state.optimalPrice);
+  logAction(`Optimal price set: ${state.optimalPrice}₽`);
+}
+
+async function acceptCurrentPrice() {
   try {
     ensureDataReady();
-    const startPrice = Number(state.data.analysis.start_price);
+    const currentPrice = parseInt(priceInput.value, 10);
     
-    // Получаем данные для стартовой цены
-    const priceData = getPriceData(startPrice);
-    const chance = Number(priceData.probability) / 100;
+    if (Number.isNaN(currentPrice)) {
+      alert("Пожалуйста, укажите цену.");
+      return;
+    }
+    
+    // Находим зону для текущей цены
+    let currentZone = null;
+    if (state.data.zones) {
+      for (const zone of state.data.zones) {
+        if (currentPrice >= zone.price_range.min && currentPrice <= zone.price_range.max) {
+          currentZone = zone;
+          break;
+        }
+      }
+    }
+    
+    // Используем avg_normalized_probability_percent для определения шанса
+    let chance = 0;
+    if (currentZone) {
+      chance = Number(currentZone.metrics.avg_normalized_probability_percent) / 100;
+    } else {
+      // Если вне зон (красная зона) - низкий шанс
+      chance = 0.1; // 10% для красной зоны
+    }
+    
     const roll = Math.random();
     const accepted = roll <= chance;
     
@@ -675,14 +754,16 @@ async function acceptStartPrice() {
     const originalText = acceptButton.textContent;
     const originalColor = acceptButton.style.backgroundColor;
     
+    const zoneName = currentZone ? currentZone.zone_name : "red_zone";
+    
     if (accepted) {
       acceptButton.textContent = "✓ Клиент ПРИНЯЛ!";
       acceptButton.style.backgroundColor = "var(--drivee-green)";
-      logAction(`Virtual client ACCEPTED ${startPrice}₽ (chance ${(chance * 100).toFixed(1)}%, roll ${(roll * 100).toFixed(1)}%)`);
+      logAction(`Virtual client ACCEPTED ${currentPrice}₽ (zone: ${zoneName}, norm_prob: ${(chance * 100).toFixed(1)}%, roll: ${(roll * 100).toFixed(1)}%)`);
     } else {
       acceptButton.textContent = "✗ Клиент ОТКЛОНИЛ";
       acceptButton.style.backgroundColor = "var(--danger-color)";
-      logAction(`Virtual client REJECTED ${startPrice}₽ (chance ${(chance * 100).toFixed(1)}%, roll ${(roll * 100).toFixed(1)}%)`);
+      logAction(`Virtual client REJECTED ${currentPrice}₽ (zone: ${zoneName}, norm_prob: ${(chance * 100).toFixed(1)}%, roll: ${(roll * 100).toFixed(1)}%)`);
     }
     
     // Возвращаем кнопку к нормальному виду через 2 секунды
@@ -705,7 +786,9 @@ async function activeBidUpdate(targetPrice) {
       price_start_local: normalizedPrice,
       order_timestamp: Math.floor(Date.now() / 1000),
       carname: state.order.carname ?? "",
+      driver_rating: state.order.driver_rating != null ? parseFloat(state.order.driver_rating) : 5.0,
     };
+    console.log("🚀 Sending request to API. driver_rating:", state.order.driver_rating, "type:", typeof state.order.driver_rating);
     const freshData = await requestPricing(state.order);
     applyDataToUi(freshData);
     updatePointerAndDisplay(normalizedPrice);
@@ -729,7 +812,7 @@ function toggleTheme() {
   logAction(`Theme Switched to: ${isDark ? "Dark" : "Light"}`);
 }
 
-async function changePrice(delta) {
+function changePrice(delta) {
   if (!state.ready) return;
   let currentPrice = parseInt(priceInput.value || 0, 10);
   if (Number.isNaN(currentPrice)) currentPrice = state.priceMin;
@@ -741,7 +824,6 @@ async function changePrice(delta) {
   priceInput.value = newPrice;
   updatePointerAndDisplay(newPrice);
   logAction(`Price adjusted by button: ${newPrice} ₽`);
-  await activeBidUpdate(newPrice);
 }
 
 function openMenu() {
@@ -765,7 +847,8 @@ function wireGlobalHandlers() {
   window.exitOrder = exitOrder;
   window.toggleTheme = toggleTheme;
   window.changePrice = changePrice;
-  window.acceptStartPrice = acceptStartPrice;
+  window.acceptCurrentPrice = acceptCurrentPrice;
+  window.setOptimalPrice = setOptimalPrice;
   window.showAnalysis = showAnalysis;
   window.closeModal = closeModal;
   window.logAction = logAction;
