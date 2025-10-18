@@ -1,193 +1,427 @@
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split, StratifiedKFold
-from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
+import xgboost as xgb
 import joblib
-import multiprocessing
+import warnings
+warnings.filterwarnings('ignore')
+
+def clean_and_validate_data(df, verbose=True, keep_only_done=False):
+    initial_count = len(df)
+    
+    if verbose:
+        print("\n" + "="*70)
+        print("ОЧИСТКА И ВАЛИДАЦИЯ ДАННЫХ")
+        print("="*70)
+        print(f"Исходных записей: {initial_count}")
+        if keep_only_done:
+            print("Режим: Только принятые биды (done)")
+        else:
+            print("Режим: Все биды (done + cancel) для обучения на конкуренции")
+        print()
+    
+    df['order_timestamp'] = pd.to_datetime(df['order_timestamp'], errors='coerce')
+    df['tender_timestamp'] = pd.to_datetime(df['tender_timestamp'], errors='coerce')
+    df['driver_reg_date'] = pd.to_datetime(df['driver_reg_date'], errors='coerce')
+    
+    df['response_time_seconds'] = (df['tender_timestamp'] - df['order_timestamp']).dt.total_seconds()
+    df['avg_speed_kmh'] = (df['distance_in_meters'] / df['duration_in_seconds'] * 3.6)
+    df['avg_speed_kmh'] = df['avg_speed_kmh'].replace([np.inf, -np.inf], np.nan)
+    df['pickup_speed_kmh'] = (df['pickup_in_meters'] / df['pickup_in_seconds'] * 3.6)
+    df['pickup_speed_kmh'] = df['pickup_speed_kmh'].replace([np.inf, -np.inf], np.nan)
+    df['pickup_ratio'] = df['pickup_in_meters'] / df['distance_in_meters']
+    df['pickup_ratio'] = df['pickup_ratio'].replace([np.inf, -np.inf], np.nan)
+    df['price_increase_pct'] = ((df['price_bid_local'] - df['price_start_local']) / df['price_start_local'] * 100)
+    
+    problems = {}
+    
+    problems['future_driver'] = (df['driver_reg_date'] > df['order_timestamp'])
+    problems['future_bid'] = (df['tender_timestamp'] < df['order_timestamp'])
+    problems['slow_response'] = (df['response_time_seconds'] > 300)
+    
+    problems['zero_distance'] = (df['distance_in_meters'] <= 0)
+    problems['zero_duration'] = (df['duration_in_seconds'] <= 0)
+    problems['zero_price'] = (df['price_bid_local'] <= 0)
+    
+    problems['too_short_trip'] = (df['distance_in_meters'] < 500)
+    problems['too_quick_trip'] = (df['duration_in_seconds'] < 60)
+    
+    problems['extreme_distance'] = (df['distance_in_meters'] > 100000)
+    problems['extreme_duration'] = (df['duration_in_seconds'] > 7200)
+    
+    problems['too_fast_city'] = (df['avg_speed_kmh'].notna()) & (df['avg_speed_kmh'] > 80)
+    min_possible_duration = df['distance_in_meters'] / (120 / 3.6)
+    problems['physically_impossible'] = (df['duration_in_seconds'] < min_possible_duration)
+    problems['too_slow'] = (df['avg_speed_kmh'].notna()) & (df['avg_speed_kmh'] < 8)
+    
+    problems['extreme_pickup_ratio'] = (df['pickup_ratio'].notna()) & (df['pickup_ratio'] > 5)
+    problems['extreme_pickup_speed'] = (df['pickup_speed_kmh'].notna()) & (df['pickup_speed_kmh'] > 100)
+    
+    problems['extreme_markup'] = (df['price_increase_pct'] > 100)
+    problems['extreme_price'] = (df['price_bid_local'] > 5000)
+    
+    duplicate_mask = df.duplicated(subset=[
+        'order_id', 'driver_id', 'price_bid_local', 
+        'pickup_in_meters', 'tender_timestamp'
+    ], keep='first')
+    problems['exact_duplicate'] = duplicate_mask
+    
+    if keep_only_done:
+        problems['not_accepted'] = (df['is_done'] != 'done')
+    
+    if verbose:
+        descriptions = {
+            'future_driver': 'Водитель зарегистрирован после заказа',
+            'future_bid': 'Бид отправлен до создания заказа',
+            'slow_response': 'Медленный ответ водителя (>5 мин)',
+            'zero_distance': 'Нулевое/отрицательное расстояние',
+            'zero_duration': 'Нулевая/отрицательная длительность',
+            'zero_price': 'Нулевая/отрицательная цена',
+            'too_short_trip': 'Слишком короткая поездка (<500м)',
+            'too_quick_trip': 'Слишком быстрая поездка (<60сек)',
+            'extreme_distance': 'Слишком длинная поездка (>100 км)',
+            'extreme_duration': 'Слишком долгая поездка (>2 ч)',
+            'too_fast_city': 'Слишком высокая скорость (>80 км/ч)',
+            'physically_impossible': 'Физически невозможная скорость (>120 км/ч)',
+            'too_slow': 'Слишком низкая скорость (<8 км/ч)',
+            'extreme_pickup_ratio': 'Подача >5x длиннее поездки',
+            'extreme_pickup_speed': 'Скорость подачи >100 км/ч',
+            'extreme_markup': 'Наценка >100%',
+            'extreme_price': 'Цена >5000₽',
+            'exact_duplicate': 'Точный дубликат (все поля совпадают)',
+            'not_accepted': 'Отклонённый бид (is_done=cancel)'
+        }
+        
+        print(f"{'Проблема':<50s} {'Записей':>10s}")
+        print("-"*62)
+        
+        for name, mask in problems.items():
+            count = mask.sum()
+            if count > 0:
+                desc = descriptions.get(name, name)
+                print(f"{desc:<50s} {count:>10d}")
+    
+    delete_mask = pd.Series(False, index=df.index)
+    for mask in problems.values():
+        delete_mask |= mask
+    
+    df_clean = df[~delete_mask].copy()
+    
+    if verbose:
+        print("-"*62)
+        print(f"{'ИТОГО удалено:':<50s} {delete_mask.sum():>10d} ({delete_mask.sum()/initial_count*100:.1f}%)")
+        print(f"{'Осталось записей:':<50s} {len(df_clean):>10d} ({len(df_clean)/initial_count*100:.1f}%)")
+        
+        unique_orders = df_clean['order_id'].nunique()
+        avg_bids_per_order = len(df_clean) / unique_orders if unique_orders > 0 else 0
+        print(f"\n{'Уникальных заказов:':<50s} {unique_orders:>10d}")
+        print(f"{'Среднее бидов на заказ:':<50s} {avg_bids_per_order:>10.2f}")
+        
+        df_clean['is_done_binary'] = (df_clean['is_done'] == 'done').astype(int)
+        done_count = df_clean['is_done_binary'].sum()
+        cancel_count = len(df_clean) - done_count
+        done_pct = done_count / len(df_clean) * 100 if len(df_clean) > 0 else 0
+        
+        print(f"\n{'Баланс классов:':<50s}")
+        print(f"{'  Done':<50s} {done_count:>10d} ({done_pct:5.1f}%)")
+        print(f"{'  Cancel':<50s} {cancel_count:>10d} ({100-done_pct:5.1f}%)")
+        
+        if done_count > 0:
+            ratio = cancel_count / done_count
+            print(f"\n{'scale_pos_weight для XGBoost:':<50s} {ratio:>10.2f}")
+        print("="*70)
+    
+    return df_clean
+
+def detect_taxi_type(carname, carmodel):
+    carname = str(carname).strip()
+    carmodel = str(carmodel).strip()
+    
+    economy_brands = ['Daewoo', 'Lifan', 'FAW', 'Great Wall', 'Geely', 'ЗАЗ', 'Chery']
+    economy_models = [
+        'Logan', 'Symbol', 'Sandero', 'Lacetti', 'Aveo', 'Nexia', 'Rio', 'Spectra',
+        'Granta', 'Гранта', 'Kalina', 'Калина', 'Priora', 'Приора', 
+        '2110', '2112', '2115', '2107', '2114', 'Самара', 'S18'
+    ]
+    
+    business_brands = ['Toyota', 'Honda', 'Mitsubishi', 'Subaru']
+    business_models = [
+        'Camry', 'Corolla', 'RAV4', 'Avensis', 'Civic', 'Accord', 
+        'Qashqai', 'X-Trail', 'Tiguan', 'Passat CC', 'Passat',
+        'CX-5', 'Outlander', 'Kyron', 'Legacy'
+    ]
+    
+    lada_comfort_models = ['Vesta', 'Веста', 'X-Ray', 'Largus', 'Ларгус', 'GFK110']
+    
+    if carname in economy_brands or carmodel in economy_models:
+        return "economy"
+    
+    if carname in business_brands or carmodel in business_models:
+        return "business"
+    
+    if carname in ['LADA', 'Лада', 'ВАЗ (LADA)'] and carmodel in lada_comfort_models:
+        return "comfort"
+    
+    return "comfort"
 
 def build_enhanced_features(frame):
-    """Строит расширенный набор признаков (независимо от года/месяца)"""
     ts = pd.to_datetime(frame["order_timestamp"], errors="coerce")
     hour = ts.dt.hour.fillna(0)
     wday = ts.dt.weekday.fillna(0)
     
-    # Временные признаки (независимы от года!)
+    features = {}
+    
+    features['price_bid_local'] = frame['price_bid_local'].values
+    features['price_start_local'] = frame['price_start_local'].values
+    features['price_increase_abs'] = (frame['price_bid_local'] - frame['price_start_local']).values
+    features['price_increase_pct'] = ((frame['price_bid_local'] - frame['price_start_local']) / 
+                                      frame['price_start_local'] * 100).values
+    features['is_price_increased'] = (features['price_increase_pct'] > 0).astype(float)
+    
+    features['price_per_km'] = frame['price_bid_local'] / (frame['distance_in_meters'] / 1000 + 0.1)
+    features['price_per_minute'] = frame['price_bid_local'] / (frame['duration_in_seconds'] / 60 + 0.1)
+    
+    features['hour_sin'] = np.sin(2 * np.pi * hour / 24)
+    features['hour_cos'] = np.cos(2 * np.pi * hour / 24)
+    features['day_of_week'] = wday.values
+    features['day_sin'] = np.sin(2 * np.pi * wday / 7)
+    features['day_cos'] = np.cos(2 * np.pi * wday / 7)
+    features['is_weekend'] = (wday >= 5).astype(float).values
+    
     is_morning_rush = ((hour >= 7) & (hour <= 9)).astype(int)
-    is_evening_rush = ((hour >= 15) & (hour <= 17)).astype(int)
-    is_night_rush = ((hour >= 19) & (hour <= 21)).astype(int)
-    is_peak_hour = ((is_morning_rush + is_evening_rush + is_night_rush) > 0).astype(float)
-    is_weekend = (wday >= 5).astype(float)
-    is_night = ((hour < 6) | (hour >= 22)).astype(float)
+    is_evening_rush = ((hour >= 17) & (hour <= 20)).astype(int)
+    features['is_morning_peak'] = is_morning_rush.values
+    features['is_evening_peak'] = is_evening_rush.values
+    features['is_peak_hour'] = ((is_morning_rush + is_evening_rush) > 0).astype(float).values
+    features['is_night'] = ((hour < 6) | (hour >= 22)).astype(float).values
+    features['is_lunch_time'] = ((hour >= 12) & (hour <= 14)).astype(float).values
     
-    # Базовые характеристики поездки
-    dist_km = frame["distance_in_meters"] / 1000.0
-    dur_min = frame["duration_in_seconds"] / 60.0
-    pickup_km = frame["pickup_in_meters"] / 1000.0
-    pickup_min = frame["pickup_in_seconds"] / 60.0
-    log_start = np.log1p(frame["price_start_local"])
-    price_per_km = frame["price_start_local"] / (dist_km + 0.1)
+    features['distance_in_meters'] = frame['distance_in_meters'].values
+    features['duration_in_seconds'] = frame['duration_in_seconds'].values
+    features['distance_km'] = (frame['distance_in_meters'] / 1000).values
+    features['duration_min'] = (frame['duration_in_seconds'] / 60).values
     
-    # Стаж водителя
-    driver_reg = pd.to_datetime(frame["driver_reg_date"], errors="coerce")
-    days_since_reg = (ts - driver_reg).dt.days.fillna(0)
-    driver_experience_months = days_since_reg / 30.0
-    is_new_driver = (days_since_reg < 30).astype(float)
+    speed = frame['distance_in_meters'] / (frame['duration_in_seconds'] + 0.1) * 3.6
+    features['avg_speed_kmh'] = np.clip(speed.values, 0, 150)
+    features['is_traffic_jam'] = (features['avg_speed_kmh'] < 15).astype(float)
+    features['is_highway'] = (features['avg_speed_kmh'] > 50).astype(float)
     
-    # Марка автомобиля
-    premium_brands = ['Toyota', 'Volkswagen', 'Hyundai', 'Nissan', 'Skoda']
-    is_premium_car = frame.get("carname", pd.Series("", index=frame.index)).isin(premium_brands).astype(float)
+    dist = features['distance_km']
+    features['is_short_trip'] = (dist < 2).astype(float)
+    features['is_medium_trip'] = ((dist >= 2) & (dist < 10)).astype(float)
+    features['is_long_trip'] = (dist >= 10).astype(float)
     
-    # Частота клиента (агрегация по user_id)
-    if 'user_id' in frame.columns:
-        user_counts = frame.groupby('user_id').size()
-        frame['user_order_count'] = frame['user_id'].map(user_counts).fillna(1)
-        is_frequent_user = (frame['user_order_count'] > 5).astype(float)
-    else:
-        is_frequent_user = pd.Series(0, index=frame.index)
+    features['pickup_in_meters'] = frame['pickup_in_meters'].values
+    features['pickup_in_seconds'] = frame['pickup_in_seconds'].values
+    features['pickup_km'] = (frame['pickup_in_meters'] / 1000).values
     
-    # Время отклика водителя
-    if 'tender_timestamp' in frame.columns:
-        tender_time = pd.to_datetime(frame["tender_timestamp"], errors="coerce")
-        response_time_seconds = (tender_time - ts).dt.total_seconds().fillna(60)
-        response_time_minutes = response_time_seconds / 60.0
-        # Логарифм времени отклика (сглаживает выбросы)
-        log_response_time = np.log1p(response_time_minutes)
-    else:
-        response_time_minutes = pd.Series(0, index=frame.index)
-        log_response_time = pd.Series(0, index=frame.index)
+    pickup_speed = frame['pickup_in_meters'] / (frame['pickup_in_seconds'] + 0.1) * 3.6
+    features['pickup_speed_kmh'] = np.clip(pickup_speed.values, 0, 150)
     
-    X = pd.DataFrame({
-        # Базовые признаки
-        "dist_km": dist_km,
-        "dur_min": dur_min,
-        "pickup_km": pickup_km,
-        "pickup_min": pickup_min,
-        "rating": frame.get("driver_rating", pd.Series(0, index=frame.index)),
-        "log_start": log_start,
-        
-        # Временные признаки (циклические - НЕ зависят от года!)
-        "hour_sin": np.sin(2*np.pi*hour/24.0),
-        "hour_cos": np.cos(2*np.pi*hour/24.0),
-        "wday_sin": np.sin(2*np.pi*wday/7.0),
-        "wday_cos": np.cos(2*np.pi*wday/7.0),
-        
-        # Часы пик
-        "is_peak_hour": is_peak_hour,
-        "is_morning_rush": is_morning_rush.astype(float),
-        "is_evening_rush": is_evening_rush.astype(float),
-        "is_night_rush": is_night_rush.astype(float),
-        "is_weekend": is_weekend,
-        "is_night": is_night,
-        
-        # Производные признаки
-        "speed_kmh": dist_km / ((dur_min + 1) / 60.0),
-        "pickup_speed": pickup_km / ((pickup_min + 1) / 60.0),
-        "total_time_min": dur_min + pickup_min,
-        "price_per_km": price_per_km,
-        "price_per_min": frame["price_start_local"] / (dur_min + 0.1),
-        
-        # Информация о водителе
-        "driver_experience_months": driver_experience_months,
-        "is_new_driver": is_new_driver,
-        "is_premium_car": is_premium_car,
-        
-        # Информация о клиенте
-        "is_frequent_user": is_frequent_user,
-        
-        # Время отклика
-        "response_time_minutes": response_time_minutes,
-        "log_response_time": log_response_time,
-        
-        # Базовые взаимодействия
-        "rush_x_rating": is_peak_hour * frame.get("driver_rating", pd.Series(0, index=frame.index)),
-        "weekend_x_dist": is_weekend * dist_km,
-        "peak_x_price_per_km": is_peak_hour * price_per_km,
-        "hour_x_weekend": hour * is_weekend / 24.0,
-        "morning_x_dist": is_morning_rush.astype(float) * dist_km,
-        "evening_x_dist": is_evening_rush.astype(float) * dist_km,
-        
-        # Усиленные временные взаимодействия
-        "night_x_price": is_night * log_start,
-        "night_x_dist": is_night * dist_km,
-        "night_x_price_per_km": is_night * price_per_km,
-        "hour_x_price_per_km": hour * price_per_km / 24.0,
-        "hour_x_dist": hour * dist_km / 24.0,
-        "peak_x_weekend_x_dist": is_peak_hour * is_weekend * dist_km,
-        "peak_x_weekend_x_price": is_peak_hour * is_weekend * log_start,
-        
-        # Новые взаимодействия
-        "premium_x_price": is_premium_car * log_start,
-        "experience_x_rating": driver_experience_months * frame.get("driver_rating", pd.Series(0, index=frame.index)),
-        "new_driver_x_price": is_new_driver * log_start,
-        "frequent_user_x_price": is_frequent_user * log_start,
-    }).fillna(0.0)
+    features['pickup_to_trip_ratio'] = np.clip(
+        frame['pickup_in_meters'] / (frame['distance_in_meters'] + 1).values,
+        0, 10
+    )
+    features['pickup_time_ratio'] = np.clip(
+        frame['pickup_in_seconds'] / (frame['duration_in_seconds'] + 1).values,
+        0, 10
+    )
+    features['total_distance'] = (frame['pickup_in_meters'] + frame['distance_in_meters']).values
+    features['total_time'] = (frame['pickup_in_seconds'] + frame['duration_in_seconds']).values
     
-    X = X.replace([np.inf, -np.inf], 0)
-    return X
+    features['driver_rating'] = frame['driver_rating'].values
+    
+    driver_reg = pd.to_datetime(frame['driver_reg_date'], errors='coerce')
+    experience_days = (ts - driver_reg).dt.days.fillna(365)
+    experience_days = np.clip(experience_days.values, 0, 3650)
+    features['driver_experience_days'] = experience_days
+    features['driver_experience_years'] = experience_days / 365.25
+    features['is_new_driver'] = (experience_days < 30).astype(float)
+    features['is_experienced_driver'] = (experience_days > 365).astype(float)
+    features['has_perfect_rating'] = (frame['driver_rating'] == 5.0).astype(float).values
+    features['rating_deviation'] = (5.0 - frame['driver_rating']).values
+    
+    tender_ts = pd.to_datetime(frame['tender_timestamp'], errors='coerce')
+    response_time = (tender_ts - ts).dt.total_seconds().fillna(30)
+    response_time = np.clip(response_time.values, 0, 600)
+    features['response_time_seconds'] = response_time
+    features['response_time_log'] = np.log1p(response_time)
+    features['is_fast_response'] = (response_time < 10).astype(float)
+    features['is_slow_response'] = (response_time > 60).astype(float)
+    
+    taxi_types = frame.apply(lambda row: detect_taxi_type(row['carname'], row['carmodel']), axis=1)
+    features['taxi_type_economy'] = (taxi_types == 'economy').astype(float).values
+    features['taxi_type_comfort'] = (taxi_types == 'comfort').astype(float).values
+    features['taxi_type_business'] = (taxi_types == 'business').astype(float).values
+    
+    features['platform_android'] = (frame['platform'] == 'android').astype(float).values
+    features['platform_ios'] = (frame['platform'] == 'ios').astype(float).values
+    
+    features['price_inc_x_distance'] = features['price_increase_pct'] * features['distance_km']
+    features['price_inc_x_night'] = features['price_increase_pct'] * features['is_night']
+    features['price_inc_x_peak'] = features['price_increase_pct'] * features['is_peak_hour']
+    features['price_inc_x_weekend'] = features['price_increase_pct'] * features['is_weekend']
+    
+    features['distance_x_night'] = features['distance_km'] * features['is_night']
+    features['distance_x_weekend'] = features['distance_km'] * features['is_weekend']
+    features['distance_x_peak'] = features['distance_km'] * features['is_peak_hour']
+    
+    features['speed_x_peak'] = features['avg_speed_kmh'] * features['is_peak_hour']
+    features['rating_x_price_inc'] = features['driver_rating'] * features['price_increase_pct']
+    features['experience_x_price_inc'] = features['driver_experience_years'] * features['price_increase_pct']
+    
+    result = pd.DataFrame(features)
+    
+    result = result.replace([np.inf, -np.inf], np.nan)
+    
+    for col in result.columns:
+        if result[col].isna().any():
+            median_val = result[col].median()
+            if pd.isna(median_val) or np.isinf(median_val):
+                result[col] = result[col].fillna(0)
+            else:
+                result[col] = result[col].fillna(median_val)
+    
+    result = result.fillna(0)
+    result = result.replace([np.inf], 1e10)
+    result = result.replace([-np.inf], -1e10)
+    
+    for col in result.columns:
+        if result[col].std() > 0:
+            mean = result[col].mean()
+            std = result[col].std()
+            result[col] = np.clip(result[col], mean - 10*std, mean + 10*std)
+    
+    return result
 
-def train_model(train_path="simple-train.csv"):
-    """Обучает улучшенную модель с расширенными признаками"""
-    print("📚 Загрузка данных...")
+def train_model(train_path="simple-train.csv", use_gpu=False, test_size=0.2, random_state=42):
+    print("\n" + "="*70)
+    print("ОБУЧЕНИЕ ML-МОДЕЛИ DRIVEE")
+    print("="*70)
+    
+    print(f"\n📁 Загрузка данных из {train_path}...")
     df = pd.read_csv(train_path)
+    print(f"   Загружено: {len(df)} записей")
     
-    # Проверяем наличие всех необходимых столбцов
-    required_cols = ['order_timestamp', 'price_start_local', 'is_done', 'driver_reg_date']
-    missing = [col for col in required_cols if col not in df.columns]
-    if missing:
-        raise ValueError(f"Отсутствуют столбцы: {missing}")
+    df = clean_and_validate_data(
+        df, 
+        verbose=True,
+        keep_only_done=False
+    )
     
-    df = df.dropna(subset=required_cols)
-    print(f"📊 Всего записей: {len(df)}")
+    if len(df) < 100:
+        raise ValueError("⚠️ Слишком мало данных после очистки! Проверьте исходный датасет.")
     
+    print("\n🎯 Подготовка целевой переменной...")
+    y = (df['is_done'] == 'done').astype(int)
+    print(f"   Done: {y.sum()} ({y.mean()*100:.1f}%)")
+    print(f"   Cancel: {(~y.astype(bool)).sum()} ({(1-y.mean())*100:.1f}%)")
+    
+    print("\n🔧 Создание признаков...")
     X = build_enhanced_features(df)
-    y = (df["is_done"].astype(str).str.lower() == "done").astype(int)
-    print(f"✅ Выполненных заказов: {y.sum()} ({y.sum()/len(y)*100:.2f}%)")
-    print(f"❌ Отменённых заказов: {len(y)-y.sum()} ({(len(y)-y.sum())/len(y)*100:.2f}%)")
+    print(f"   Создано признаков: {X.shape[1]}")
+    print(f"   Размер данных: {X.shape[0]} записей × {X.shape[1]} признаков")
     
-    print(f"\n🔧 Использовано признаков: {len(X.columns)}")
-    print(f"   Новые: стаж водителя, марка машины, частота клиента, время отклика")
-    print(f"   Модель НЕ зависит от года/месяца - только день недели и час суток")
+    print(f"\n📊 Разделение данных (test_size={test_size})...")
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state, stratify=y
+    )
+    print(f"   Train: {len(X_train)} записей")
+    print(f"   Test:  {len(X_test)} записей")
     
-    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    print("\n🤖 Обучение XGBoost...")
     
-    available_cores = multiprocessing.cpu_count() or 1
-    base_model = HistGradientBoostingClassifier(
-        learning_rate=0.08,
-        max_iter=400,
-        max_depth=None,
-        max_leaf_nodes=63,
-        l2_regularization=1.0,
-        min_samples_leaf=20,
-        max_bins=255,
-        random_state=42,
-        early_stopping=True,
-        validation_fraction=0.1,
-        n_iter_no_change=20,
+    scale_pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
+    
+    params = {
+        'n_estimators': 200,
+        'learning_rate': 0.05,
+        'max_depth': 6,
+        'min_child_weight': 10,
+        'subsample': 0.7,
+        'colsample_bytree': 0.7,
+        'gamma': 0.2,
+        'reg_alpha': 0.3,
+        'reg_lambda': 2.0,
+        'scale_pos_weight': scale_pos_weight,
+        'tree_method': 'hist',
+        'random_state': random_state,
+        'eval_metric': 'logloss'
+    }
+    
+    print(f"   Параметры:")
+    print(f"     • n_estimators: {params['n_estimators']}")
+    print(f"     • learning_rate: {params['learning_rate']}")
+    print(f"     • max_depth: {params['max_depth']}")
+    print(f"     • scale_pos_weight: {scale_pos_weight:.2f}")
+    print(f"     • tree_method: {params['tree_method']}")
+    
+    model = xgb.XGBClassifier(**params)
+    
+    model.fit(
+        X_train, y_train,
+        eval_set=[(X_test, y_test)],
+        verbose=False
     )
     
-    print("\n🚀 Обучение модели...")
-    cv_folds = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    clf = CalibratedClassifierCV(
-        base_model,
-        cv=cv_folds,
-        method="sigmoid",
-        n_jobs=max(1, available_cores - 1),
+    print("\n🎲 Калибровка вероятностей...")
+    calibrated_model = CalibratedClassifierCV(
+        model, 
+        method='sigmoid',
+        cv='prefit'
     )
-    clf.fit(Xtr, ytr)
+    calibrated_model.fit(X_train, y_train)
     
-    train_score = clf.score(Xtr, ytr)
-    test_score = clf.score(Xte, yte)
-    print(f"📈 Точность на train: {train_score:.4f}")
-    print(f"📈 Точность на test: {test_score:.4f}")
+    print("\n📈 Оценка качества модели:")
     
-    joblib.dump({
-        "model": clf,
-        "feat_cols": X.columns.tolist()
-    }, "model_enhanced.joblib")
+    y_train_pred = calibrated_model.predict_proba(X_train)[:, 1]
+    train_auc = roc_auc_score(y_train, y_train_pred)
     
-    print("\n✅ Модель обучена и сохранена в model_enhanced.joblib")
-    return clf
+    y_test_pred = calibrated_model.predict_proba(X_test)[:, 1]
+    test_auc = roc_auc_score(y_test, y_test_pred)
+    
+    precision, recall, _ = precision_recall_curve(y_test, y_test_pred)
+    pr_auc = auc(recall, precision)
+    
+    print(f"   ROC-AUC (train): {train_auc:.4f}")
+    print(f"   ROC-AUC (test):  {test_auc:.4f}")
+    print(f"   PR-AUC (test):   {pr_auc:.4f}")
+    
+    print("\n🔝 Топ-10 важных признаков:")
+    feature_importance = pd.DataFrame({
+        'feature': X.columns,
+        'importance': model.feature_importances_
+    }).sort_values('importance', ascending=False)
+    
+    for idx, row in feature_importance.head(10).iterrows():
+        print(f"   {row['feature']:30s} {row['importance']:.4f}")
+    
+    print("\n💾 Сохранение модели...")
+    joblib.dump(calibrated_model, "model_enhanced.joblib")
+    print("   ✓ Модель сохранена: model_enhanced.joblib")
+    
+    joblib.dump(X.columns.tolist(), "feature_names.joblib")
+    print("   ✓ Признаки сохранены: feature_names.joblib")
+    
+    print("\n" + "="*70)
+    print("✅ ОБУЧЕНИЕ ЗАВЕРШЕНО УСПЕШНО!")
+    print("="*70)
+    
+    return calibrated_model, feature_importance
 
 if __name__ == "__main__":
-    train_model()
+    try:
+        model, importance = train_model(
+            train_path="simple-train.csv",
+            use_gpu=False,
+            test_size=0.2,
+            random_state=42
+        )
+        print("\n🎉 Модель готова к использованию!")
+        
+    except Exception as e:
+        print(f"\n❌ Ошибка при обучении: {e}")
+        import traceback
+        traceback.print_exc()

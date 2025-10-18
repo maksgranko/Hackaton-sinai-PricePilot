@@ -1,397 +1,316 @@
-from __future__ import annotations
-
+import pandas as pd
+import numpy as np
+import joblib
 import json
 import os
 from datetime import datetime
-from functools import lru_cache
-from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Tuple, Union
 
-import joblib
-import numpy as np
-import pandas as pd
+def detect_taxi_type(carname, carmodel):
+    carname = str(carname).strip()
+    carmodel = str(carmodel).strip()
+    economy_brands = ['Daewoo', 'Lifan', 'FAW', 'Great Wall', 'Geely', 'ЗАЗ', 'Chery']
+    economy_models = [
+        'Logan', 'Symbol', 'Sandero', 'Lacetti', 'Aveo', 'Nexia', 'Rio', 'Spectra',
+        'Granta', 'Гранта', 'Kalina', 'Калина', 'Priora', 'Приора',
+        '2110', '2112', '2115', '2107', '2114', 'Самара', 'S18'
+    ]
+    business_brands = ['Toyota', 'Honda', 'Mitsubishi', 'Subaru']
+    business_models = [
+        'Camry', 'Corolla', 'RAV4', 'Avensis', 'Civic', 'Accord',
+        'Qashqai', 'X-Trail', 'Tiguan', 'Passat CC', 'Passat',
+        'CX-5', 'Outlander', 'Kyron', 'Legacy'
+    ]
+    lada_comfort_models = ['Vesta', 'Веста', 'X-Ray', 'Largus', 'Ларгус', 'GFK110']
+    if carname in economy_brands or carmodel in economy_models:
+        return "economy"
+    if carname in business_brands or carmodel in business_models:
+        return "business"
+    if carname in ['LADA', 'Лада', 'ВАЗ (LADA)'] and carmodel in lada_comfort_models:
+        return "comfort"
+    return "comfort"
 
-DEFAULT_MODEL_PATH = Path(os.getenv("PRICING_MODEL_PATH", "model_enhanced.joblib"))
-DEFAULT_PRICE_STEPS = max(int(os.getenv("PRICING_SCAN_POINTS", "200")), 20)
-
-OrderLike = Union[Mapping[str, Any], "schemas.OrderRequest"]  # type: ignore[name-defined]
-ZoneConfig = Dict[str, Any]
-
-
-def _ensure_series(
-    value: Union[pd.Series, Any], index: pd.Index, default: float = 0.0
-) -> pd.Series:
-    if isinstance(value, pd.Series):
-        return value
-    if isinstance(value, (list, tuple, np.ndarray)):
-        return pd.Series(value, index=index)
-    if np.isscalar(value):
-        return pd.Series(value, index=index)
-    return pd.Series(default, index=index)
-
-
-def build_features_with_order(
-    order_dict: Mapping[str, Any], feat_cols: Iterable[str]
-) -> pd.DataFrame:
-    """Строит признаки для одного заказа"""
-    frame = pd.DataFrame([order_dict])
-
-    if isinstance(frame["order_timestamp"].iloc[0], (int, float)):
-        frame["order_timestamp"] = pd.to_datetime(
-            frame["order_timestamp"], unit="s", errors="coerce"
-        )
-    else:
-        frame["order_timestamp"] = pd.to_datetime(
-            frame["order_timestamp"], errors="coerce"
-        )
-
-    ts = frame["order_timestamp"]
+def build_features_for_price(order_data, price_bid, reference_price):
+    temp_df = pd.DataFrame([{
+        'order_timestamp': order_data['order_timestamp'],
+        'tender_timestamp': order_data.get('tender_timestamp', order_data['order_timestamp']),
+        'driver_reg_date': order_data.get('driver_reg_date', '2020-01-01'),
+        'distance_in_meters': order_data['distance_in_meters'],
+        'duration_in_seconds': order_data['duration_in_seconds'],
+        'pickup_in_meters': order_data['pickup_in_meters'],
+        'pickup_in_seconds': order_data['pickup_in_seconds'],
+        'driver_rating': order_data.get('driver_rating', 5.0),
+        'carname': order_data.get('carname', 'Renault'),
+        'carmodel': order_data.get('carmodel', 'Logan'),
+        'platform': order_data.get('platform', 'android'),
+        'price_start_local': reference_price,
+        'price_bid_local': price_bid
+    }])
+    ts = pd.to_datetime(temp_df["order_timestamp"], errors="coerce")
     hour = ts.dt.hour.fillna(0)
     wday = ts.dt.weekday.fillna(0)
-
-    is_morning_rush = ((hour >= 7) & (hour <= 9)).astype(int)
-    is_evening_rush = ((hour >= 15) & (hour <= 17)).astype(int)
-    is_night_rush = ((hour >= 19) & (hour <= 21)).astype(int)
-    is_peak_hour = ((is_morning_rush + is_evening_rush + is_night_rush) > 0).astype(
-        float
+    features = {}
+    features['price_bid_local'] = price_bid
+    features['price_start_local'] = reference_price
+    features['price_increase_abs'] = price_bid - reference_price
+    features['price_increase_pct'] = ((price_bid - reference_price) / reference_price * 100)
+    features['is_price_increased'] = float(features['price_increase_pct'] > 0)
+    features['price_per_km'] = price_bid / (order_data['distance_in_meters'] / 1000 + 0.1)
+    features['price_per_minute'] = price_bid / (order_data['duration_in_seconds'] / 60 + 0.1)
+    h = hour.iloc[0]
+    w = wday.iloc[0]
+    features['hour_sin'] = np.sin(2 * np.pi * h / 24)
+    features['hour_cos'] = np.cos(2 * np.pi * h / 24)
+    features['day_of_week'] = w
+    features['day_sin'] = np.sin(2 * np.pi * w / 7)
+    features['day_cos'] = np.cos(2 * np.pi * w / 7)
+    features['is_weekend'] = float(w >= 5)
+    is_morning = 1 if 7 <= h <= 9 else 0
+    is_evening = 1 if 17 <= h <= 20 else 0
+    features['is_morning_peak'] = float(is_morning)
+    features['is_evening_peak'] = float(is_evening)
+    features['is_peak_hour'] = float(is_morning or is_evening)
+    features['is_night'] = float(h < 6 or h >= 22)
+    features['is_lunch_time'] = float(12 <= h <= 14)
+    dist_m = order_data['distance_in_meters']
+    dur_s = order_data['duration_in_seconds']
+    features['distance_in_meters'] = dist_m
+    features['duration_in_seconds'] = dur_s
+    features['distance_km'] = dist_m / 1000
+    features['duration_min'] = dur_s / 60
+    avg_speed = (dist_m / dur_s * 3.6) if dur_s > 0 else 25.0
+    features['avg_speed_kmh'] = avg_speed
+    features['is_traffic_jam'] = float(avg_speed < 15)
+    features['is_highway'] = float(avg_speed > 50)
+    dist_km = features['distance_km']
+    features['is_short_trip'] = float(dist_km < 2)
+    features['is_medium_trip'] = float(2 <= dist_km < 10)
+    features['is_long_trip'] = float(dist_km >= 10)
+    pickup_m = order_data['pickup_in_meters']
+    pickup_s = order_data['pickup_in_seconds']
+    features['pickup_in_meters'] = pickup_m
+    features['pickup_in_seconds'] = pickup_s
+    features['pickup_km'] = pickup_m / 1000
+    pickup_speed = (pickup_m / pickup_s * 3.6) if pickup_s > 0 else 20.0
+    features['pickup_speed_kmh'] = pickup_speed
+    features['pickup_to_trip_ratio'] = pickup_m / (dist_m + 1)
+    features['pickup_time_ratio'] = pickup_s / (dur_s + 1)
+    features['total_distance'] = pickup_m + dist_m
+    features['total_time'] = pickup_s + dur_s
+    features['driver_rating'] = order_data.get('driver_rating', 5.0)
+    try:
+        driver_reg = pd.to_datetime(order_data.get('driver_reg_date', '2020-01-01'))
+        order_ts = ts.iloc[0]
+        exp_days = (order_ts - driver_reg).days
+        if exp_days < 0:
+            exp_days = 365
+    except:
+        exp_days = 365
+    features['driver_experience_days'] = exp_days
+    features['driver_experience_years'] = exp_days / 365.25
+    features['is_new_driver'] = float(exp_days < 30)
+    features['is_experienced_driver'] = float(exp_days > 365)
+    features['has_perfect_rating'] = float(features['driver_rating'] == 5.0)
+    features['rating_deviation'] = 5.0 - features['driver_rating']
+    response_time = 30.0
+    features['response_time_seconds'] = response_time
+    features['response_time_log'] = np.log1p(response_time)
+    features['is_fast_response'] = float(response_time < 10)
+    features['is_slow_response'] = float(response_time > 60)
+    taxi_type = detect_taxi_type(
+        order_data.get('carname', 'Renault'),
+        order_data.get('carmodel', 'Logan')
     )
-    is_weekend = (wday >= 5).astype(float)
-    is_night = ((hour < 6) | (hour >= 22)).astype(float)
+    features['taxi_type_economy'] = float(taxi_type == 'economy')
+    features['taxi_type_comfort'] = float(taxi_type == 'comfort')
+    features['taxi_type_business'] = float(taxi_type == 'business')
+    platform = order_data.get('platform', 'android')
+    features['platform_android'] = float(platform == 'android')
+    features['platform_ios'] = float(platform == 'ios')
+    features['price_inc_x_distance'] = features['price_increase_pct'] * features['distance_km']
+    features['price_inc_x_night'] = features['price_increase_pct'] * features['is_night']
+    features['price_inc_x_peak'] = features['price_increase_pct'] * features['is_peak_hour']
+    features['price_inc_x_weekend'] = features['price_increase_pct'] * features['is_weekend']
+    features['distance_x_night'] = features['distance_km'] * features['is_night']
+    features['distance_x_weekend'] = features['distance_km'] * features['is_weekend']
+    features['distance_x_peak'] = features['distance_km'] * features['is_peak_hour']
+    features['speed_x_peak'] = features['avg_speed_kmh'] * features['is_peak_hour']
+    features['rating_x_price_inc'] = features['driver_rating'] * features['price_increase_pct']
+    features['experience_x_price_inc'] = features['driver_experience_years'] * features['price_increase_pct']
+    result = pd.DataFrame([features])
+    return result
 
-    dist_km = frame["distance_in_meters"] / 1000.0
-    dur_min = frame["duration_in_seconds"] / 60.0
-    pickup_km = frame["pickup_in_meters"] / 1000.0
-    pickup_min = frame["pickup_in_seconds"] / 60.0
-    log_start = np.log1p(frame["price_start_local"])
-    price_per_km = frame["price_start_local"] / (dist_km + 0.1)
+def estimate_reference_price(order_data):
+    dist_km = order_data['distance_in_meters'] / 1000
+    dur_min = order_data['duration_in_seconds'] / 60
+    base_price = 100
+    price_per_km = 15
+    price_per_min = 5
+    estimated = base_price + (dist_km * price_per_km) + (dur_min * price_per_min)
+    return estimated
 
-    if "driver_reg_date" in frame.columns and pd.notna(frame["driver_reg_date"].iloc[0]):
-        driver_reg = pd.to_datetime(frame["driver_reg_date"], errors="coerce")
-        days_since_reg = (ts - driver_reg).dt.days.fillna(180)
-        driver_experience_months = days_since_reg / 30.0
-        is_new_driver = (days_since_reg < 30).astype(float)
+def find_optimal_price(order_data, model, num_points=500):
+    user_min_price = order_data['price_start_local']
+    reference_price = estimate_reference_price(order_data)
+    
+    search_min = min(user_min_price, reference_price * 0.5)
+    search_max = reference_price * 3
+    
+    test_prices = np.linspace(search_min, search_max, 100)
+    test_probs = []
+    for price in test_prices:
+        features = build_features_for_price(order_data, price, reference_price)
+        prob = model.predict_proba(features)[0, 1]
+        test_probs.append(prob)
+    
+    test_probs = np.array(test_probs)
+    prob_threshold = 0.05
+    valid_indices = test_probs >= prob_threshold
+    if valid_indices.any():
+        max_price = test_prices[valid_indices][-1]
     else:
-        driver_experience_months = pd.Series(6.0, index=frame.index)
-        is_new_driver = pd.Series(0.0, index=frame.index)
-
-    premium_brands = {"Toyota", "Volkswagen", "Hyundai", "Nissan", "Skoda"}
-    car_series = _ensure_series(frame.get("carname", ""), frame.index, "")
-    is_premium_car = car_series.isin(premium_brands).astype(float)
-
-    is_frequent_user = pd.Series(0.5, index=frame.index)
-    response_time_minutes = pd.Series(1.0, index=frame.index)
-    log_response_time = pd.Series(0.0, index=frame.index)
-
-    base = pd.DataFrame(
-        {
-            "dist_km": dist_km,
-            "dur_min": dur_min,
-            "pickup_km": pickup_km,
-            "pickup_min": pickup_min,
-            "rating": _ensure_series(frame.get("driver_rating", 4.5), frame.index, 4.5),
-            "log_start": log_start,
-            "hour_sin": np.sin(2 * np.pi * hour / 24.0),
-            "hour_cos": np.cos(2 * np.pi * hour / 24.0),
-            "wday_sin": np.sin(2 * np.pi * wday / 7.0),
-            "wday_cos": np.cos(2 * np.pi * wday / 7.0),
-            "is_peak_hour": is_peak_hour,
-            "is_morning_rush": is_morning_rush.astype(float),
-            "is_evening_rush": is_evening_rush.astype(float),
-            "is_night_rush": is_night_rush.astype(float),
-            "is_weekend": is_weekend,
-            "is_night": is_night,
-            "speed_kmh": dist_km / ((dur_min + 1) / 60.0),
-            "pickup_speed": pickup_km / ((pickup_min + 1) / 60.0),
-            "total_time_min": dur_min + pickup_min,
-            "price_per_km": price_per_km,
-            "price_per_min": frame["price_start_local"] / (dur_min + 0.1),
-            "driver_experience_months": driver_experience_months,
-            "is_new_driver": is_new_driver,
-            "is_premium_car": is_premium_car,
-            "is_frequent_user": is_frequent_user,
-            "response_time_minutes": response_time_minutes,
-            "log_response_time": log_response_time,
-            "rush_x_rating": is_peak_hour
-            * _ensure_series(frame.get("driver_rating", 4.5), frame.index, 4.5),
-            "weekend_x_dist": is_weekend * dist_km,
-            "peak_x_price_per_km": is_peak_hour * price_per_km,
-            "hour_x_weekend": hour * is_weekend / 24.0,
-            "morning_x_dist": is_morning_rush.astype(float) * dist_km,
-            "evening_x_dist": is_evening_rush.astype(float) * dist_km,
-            "night_x_price": is_night * log_start,
-            "night_x_dist": is_night * dist_km,
-            "night_x_price_per_km": is_night * price_per_km,
-            "hour_x_price_per_km": hour * price_per_km / 24.0,
-            "hour_x_dist": hour * dist_km / 24.0,
-            "peak_x_weekend_x_dist": is_peak_hour * is_weekend * dist_km,
-            "peak_x_weekend_x_price": is_peak_hour * is_weekend * log_start,
-            "premium_x_price": is_premium_car * log_start,
-            "experience_x_rating": driver_experience_months
-            * _ensure_series(frame.get("driver_rating", 4.5), frame.index, 4.5),
-            "new_driver_x_price": is_new_driver * log_start,
-            "frequent_user_x_price": is_frequent_user * log_start,
-        }
-    ).fillna(0.0)
-
-    base = base.replace([np.inf, -np.inf], 0)
-    base = base.reindex(columns=list(feat_cols), fill_value=0.0)
-    return base
-
-
-@lru_cache(maxsize=1)
-def _load_model(model_path: Path = DEFAULT_MODEL_PATH) -> Tuple[Any, Iterable[str]]:
-    if not model_path.exists():
-        raise FileNotFoundError(
-            f"ML model artifact not found at '{model_path}'. "
-            "Train the model or adjust PRICING_MODEL_PATH."
-        )
-    model_bundle = joblib.load(model_path)
-    return model_bundle["model"], model_bundle["feat_cols"]
-
-
-def _resolve_order_dict(order: OrderLike) -> Dict[str, Any]:
-    if hasattr(order, "model_dump"):
-        return dict(order.model_dump())  # type: ignore[call-arg]
-    if isinstance(order, Mapping):
-        return dict(order)
-    raise TypeError(f"Unsupported order payload type: {type(order)!r}")
-
-
-def _derive_scan_range(start_price: float, current_dt: datetime) -> Tuple[float, float]:
-    hour = current_dt.hour
-    wday = current_dt.weekday()
-
-    is_peak = (7 <= hour <= 9) or (15 <= hour <= 17) or (19 <= hour <= 21)
-    is_night = (hour < 6) or (hour >= 22)
-    is_weekend = wday >= 5
-
-    if is_night:
-        max_coef = 2.00
-    elif is_peak and not is_weekend:
-        max_coef = 2.20
-    elif is_weekend:
-        max_coef = 1.80
-    else:
-        max_coef = 1.60
-
-    min_scan = max(start_price * 0.6, 1.0)
-    max_scan = max(start_price * max_coef, min_scan + 1.0)
-    return min_scan, max_scan
-
-
-def _build_zone_config(
-    min_scan: float, max_scan: float, optimal_price: float
-) -> Tuple[ZoneConfig, ...]:
-    return (
-        {
-            "zone_id": 1,
-            "zone_name": "zone_1_red_low",
-            "zone_label": "red",
-            "score": 1,
-            "price_range": (min_scan, max(optimal_price * 0.75, min_scan)),
-        },
-        {
-            "zone_id": 2,
-            "zone_name": "zone_2_yellow_low",
-            "zone_label": "yellow",
-            "score": 2,
-            "price_range": (
-                max(optimal_price * 0.75, min_scan),
-                max(optimal_price * 0.90, min_scan),
-            ),
-        },
-        {
-            "zone_id": 3,
-            "zone_name": "zone_3_green",
-            "zone_label": "green",
-            "score": 3,
-            "price_range": (
-                max(optimal_price * 0.90, min_scan),
-                min(optimal_price * 1.10, max_scan),
-            ),
-        },
-        {
-            "zone_id": 4,
-            "zone_name": "zone_4_yellow_high",
-            "zone_label": "yellow",
-            "score": 2,
-            "price_range": (min(optimal_price * 1.10, max_scan), max_scan),
-        },
-    )
-
-
-def _assign_zone(price: float, zones: Tuple[ZoneConfig, ...]) -> ZoneConfig:
-    for zone in zones:
-        min_price, max_price = zone["price_range"]
-        upper_inclusive = zone["zone_id"] == zones[-1]["zone_id"]
-        if (
-            min_price <= price <= max_price
-            if upper_inclusive
-            else min_price <= price < max_price
-        ):
-            return zone
-    return zones[-1]
-
-
-def compute_price_recommendations(order: OrderLike) -> Dict[str, Any]:
-    classifier, feature_columns = _load_model()
-    order_dict = _resolve_order_dict(order)
-    order_copy = dict(order_dict)
-
-    timestamp_raw = order_dict.get("order_timestamp", datetime.utcnow().timestamp())
-    if isinstance(timestamp_raw, (int, float)):
-        current_timestamp = int(timestamp_raw)
-        current_dt = datetime.fromtimestamp(current_timestamp)
-    else:
-        current_dt = datetime.fromisoformat(str(timestamp_raw))
-        current_timestamp = int(current_dt.timestamp())
-
-    start_price = float(order_dict.get("price_start_local", 0.0))
-    min_scan, max_scan = _derive_scan_range(start_price, current_dt)
-
-    price_candidates = np.linspace(min_scan, max_scan, DEFAULT_PRICE_STEPS)
-    price_increment = (
-        float(price_candidates[1] - price_candidates[0])
-        if len(price_candidates) > 1
-        else 0.0
-    )
-
-    price_results = []
-    for candidate_price in price_candidates:
-        order_copy["price_start_local"] = float(candidate_price)
-        X_candidate = build_features_with_order(order_copy, feature_columns)
-        prob_done = float(classifier.predict_proba(X_candidate)[0, 1])
-        expected_value = float(candidate_price * prob_done)
-        price_results.append(
-            {
-                "price": float(candidate_price),
-                "probability": prob_done,
-                "expected_value": expected_value,
-            }
-        )
-
-    optimal_result = max(price_results, key=lambda x: x["expected_value"])
-    optimal_price = optimal_result["price"]
-    optimal_prob = optimal_result["probability"]
-    optimal_ev = optimal_result["expected_value"]
-
-    max_prob_result = max(price_results, key=lambda x: x["probability"])
-    max_prob = max_prob_result["probability"]
-    safe_max_prob = max(max_prob, 1e-9)
-
-    zones = _build_zone_config(min_scan, max_scan, optimal_price)
-
-    zone_price_map = {zone["zone_id"]: [] for zone in zones}
-    price_probabilities: Dict[str, Dict[str, float]] = {}
-
-    for result in price_results:
-        zone = _assign_zone(result["price"], zones)
-        zone_price_map[zone["zone_id"]].append(result)
-        price_probabilities[f"{result['price']:.2f}"] = {
-            "prob": round(result["probability"] * 100, 4),
-            "ev": round(result["expected_value"], 4),
-            "norm": round((result["probability"] / safe_max_prob) * 100, 4),
-            "zone": zone["zone_label"],
-        }
-
-    zones_payload = []
-    recommendations = []
-    optimal_zone_id = zones[-1]["zone_id"]
-    optimal_zone_label = zones[-1]["zone_label"]
-
-    for zone in zones:
-        prices = zone_price_map.get(zone["zone_id"], [])
-        if not prices:
-            continue
-
-        avg_prob = float(np.mean([p["probability"] for p in prices]))
-        avg_ev = float(np.mean([p["expected_value"] for p in prices]))
-        min_price_zone = float(min(p["price"] for p in prices))
-        max_price_zone = float(max(p["price"] for p in prices))
-
-        zone_payload = {
-            "zone_id": zone["zone_id"],
-            "zone_name": zone["zone_name"],
-            "price_range": {
-                "min": round(min_price_zone, 2),
-                "max": round(max_price_zone, 2),
+        max_price = reference_price * 1.5
+    
+    prices = np.linspace(search_min, max_price, num_points)
+    probabilities = []
+    expected_values = []
+    for price in prices:
+        features = build_features_for_price(order_data, price, reference_price)
+        prob = model.predict_proba(features)[0, 1]
+        expected_value = price * prob
+        probabilities.append(prob)
+        expected_values.append(expected_value)
+    
+    probabilities = np.array(probabilities)
+    expected_values = np.array(expected_values)
+    
+    valid_mask = prices >= user_min_price
+    if not valid_mask.any():
+        valid_mask = np.ones(len(prices), dtype=bool)
+    
+    valid_prices = prices[valid_mask]
+    valid_probs = probabilities[valid_mask]
+    valid_expected_values = expected_values[valid_mask]
+    
+    max_prob = probabilities.max()
+    normalized_probs = probabilities / max_prob if max_prob > 0 else probabilities
+    valid_normalized_probs = normalized_probs[valid_mask]
+    
+    best_idx = np.argmax(valid_expected_values)
+    optimal_price = valid_prices[best_idx]
+    optimal_prob = valid_probs[best_idx]
+    optimal_normalized_prob = valid_normalized_probs[best_idx]
+    optimal_expected_value = valid_expected_values[best_idx]
+    
+    max_prob_idx = np.argmax(probabilities)
+    max_prob_price = prices[max_prob_idx]
+    
+    sorted_indices = np.argsort(valid_expected_values)[::-1]
+    
+    num_zones = 4
+    zone_size = len(sorted_indices) // num_zones
+    zones = []
+    zone_configs = [
+        {'id': 1, 'name': 'zone_1_red_low'},
+        {'id': 2, 'name': 'zone_2_yellow_low'},
+        {'id': 3, 'name': 'zone_3_green'},
+        {'id': 4, 'name': 'zone_4_yellow_high'}
+    ]
+    
+    for i in range(num_zones):
+        start_idx = i * zone_size
+        end_idx = (i + 1) * zone_size if i < num_zones - 1 else len(sorted_indices)
+        zone_indices = sorted_indices[start_idx:end_idx]
+        
+        zone_prices = valid_prices[zone_indices]
+        zone_probs = valid_probs[zone_indices]
+        zone_normalized_probs = valid_normalized_probs[zone_indices]
+        zone_expected_values = valid_expected_values[zone_indices]
+        
+        zones.append({
+            'zone_id': zone_configs[i]['id'],
+            'zone_name': zone_configs[i]['name'],
+            'price_range': {
+                'min': round(float(zone_prices.min()), 2),
+                'max': round(float(zone_prices.max()), 2)
             },
-            "metrics": {
-                "avg_probability_percent": round(avg_prob * 100, 2),
-                "avg_normalized_probability_percent": round(
-                    (avg_prob / safe_max_prob) * 100, 2
-                ),
-                "avg_expected_value": round(avg_ev, 2),
-            },
-        }
-        zones_payload.append(zone_payload)
-
-        recommendations.append(
-            {
-                "zone": zone["zone_label"],
-                "score": zone["score"],
-                "price_range": {
-                    "min": round(min_price_zone, 2),
-                    "max": round(max_price_zone, 2),
-                },
-                "avg_probability_percent": round(avg_prob * 100, 2),
-                "normalized_probability_percent": round(
-                    (avg_prob / safe_max_prob) * 100, 2
-                ),
-                "avg_expected_value": round(avg_ev, 2),
+            'metrics': {
+                'avg_probability_percent': round(float(zone_probs.mean() * 100), 2),
+                'avg_normalized_probability_percent': round(float(zone_normalized_probs.mean() * 100), 2),
+                'avg_expected_value': round(float(zone_expected_values.mean()), 2)
             }
-        )
-
-        zone_min, zone_max = zone["price_range"]
-        if zone_min <= optimal_price <= zone_max:
-            optimal_zone_id = zone["zone_id"]
-            optimal_zone_label = zone["zone_label"]
-
+        })
+    
+    zones.sort(key=lambda x: x['price_range']['min'])
+    
+    for i in range(len(zones) - 1):
+        zones[i]['price_range']['max'] = zones[i + 1]['price_range']['min']
+    
+    optimal_zone_id = None
+    for zone in zones:
+        if zone['price_range']['min'] <= optimal_price <= zone['price_range']['max']:
+            optimal_zone_id = zone['zone_id']
+            break
+    if optimal_zone_id is None:
+        optimal_zone_id = zones[0]['zone_id']
+    
     result = {
-        "zones": zones_payload,
-        "optimal_price": {
-            "price": round(optimal_price, 2),
-            "probability_percent": round(optimal_prob * 100, 2),
-            "normalized_probability_percent": round(
-                (optimal_prob / safe_max_prob) * 100, 2
-            ),
-            "expected_value": round(optimal_ev, 2),
-            "zone_id": optimal_zone_id,
-            "zone": optimal_zone_label,
-            "score": next(
-                (z["score"] for z in zones if z["zone_id"] == optimal_zone_id), 0
-            ),
-            "zone_name": next(
-                (z["zone_name"] for z in zones if z["zone_id"] == optimal_zone_id), ""
-            ),
+        'zones': zones,
+        'optimal_price': {
+            'price': round(float(optimal_price), 2),
+            'probability_percent': round(float(optimal_prob * 100), 2),
+            'normalized_probability_percent': round(float(optimal_normalized_prob * 100), 2),
+            'expected_value': round(float(optimal_expected_value), 2),
+            'zone_id': optimal_zone_id
         },
-        "analysis": {
-            "start_price": round(start_price, 2),
-            "max_probability_percent": round(max_prob * 100, 2),
-            "max_probability_price": round(max_prob_result["price"], 2),
-            "scan_range": {
-                "min": round(min_scan, 2),
-                "max": round(max_scan, 2),
+        'analysis': {
+            'start_price': float(user_min_price),
+            'max_probability_percent': round(float(max_prob * 100), 2),
+            'max_probability_price': round(float(max_prob_price), 2),
+            'scan_range': {
+                'min': round(float(user_min_price), 2),
+                'max': round(float(max_price), 2)
             },
-            "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            "price_increment": round(price_increment, 2),
-        },
-        "price_probabilities": price_probabilities,
-        "recommendations": sorted(
-            recommendations, key=lambda r: (r["score"], r["avg_probability_percent"]), reverse=True
-        ),
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
     }
     return result
 
+def recommend_price(order_data, output_json=True, model_path="model_enhanced.joblib"):
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"⚠️ Модель не найдена: {model_path}")
+    model = joblib.load(model_path)
+    if hasattr(model, 'predict_proba'):
+        pass
+    else:
+        raise TypeError(f"Загружен неправильный объект: {type(model)}")
+    required_fields = [
+        'order_timestamp', 'distance_in_meters', 'duration_in_seconds',
+        'pickup_in_meters', 'pickup_in_seconds', 'price_start_local'
+    ]
+    for field in required_fields:
+        if field not in order_data:
+            raise ValueError(f"⚠️ Отсутствует обязательное поле: {field}")
+    result = find_optimal_price(order_data, model, num_points=500)
+    if output_json:
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    return result
 
-def recommend_price(order: OrderLike, output_format: str = "json") -> Union[str, Dict[str, Any]]:
-    """Рекомендует оптимальные зоны цен. Совместимо со старым тестовым скриптом."""
-    payload = compute_price_recommendations(order)
-    if output_format == "json":
-        return json.dumps(payload, ensure_ascii=False, indent=2)
-    return payload
-
-
-def predict(order: OrderLike) -> Dict[str, Any]:
-    """Callable для FastAPI: принимает dict/Pydantic OrderRequest, возвращает структуру ModelResponse."""
-    return compute_price_recommendations(order)
+if __name__ == "__main__":
+    if not os.path.exists("model_enhanced.joblib"):
+        print("\n⚠️ Модель не найдена! Сначала запустите train_model.py")
+        exit(1)
+    test_order = {
+        "order_timestamp": int(datetime.now().timestamp()),
+        "distance_in_meters": 3000,
+        "duration_in_seconds": 200,
+        "pickup_in_meters": 2000,
+        "pickup_in_seconds": 120,
+        "driver_rating": 4.7,
+        "platform": "android",
+        "price_start_local": 180,
+        "carname": "LADA",
+        "carmodel": "GRANTA",
+        "driver_reg_date": "2020-01-15"
+    }
+    result = recommend_price(test_order, output_json=False)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
