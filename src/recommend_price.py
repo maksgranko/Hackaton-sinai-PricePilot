@@ -10,7 +10,6 @@ import json
 import os
 from datetime import datetime
 
-
 def detect_taxi_type(carname, carmodel):
     """Определяет тип такси по марке и модели"""
     carname = str(carname).strip()
@@ -19,13 +18,13 @@ def detect_taxi_type(carname, carmodel):
     economy_brands = ['Daewoo', 'Lifan', 'FAW', 'Great Wall', 'Geely', 'ЗАЗ', 'Chery']
     economy_models = [
         'Logan', 'Symbol', 'Sandero', 'Lacetti', 'Aveo', 'Nexia', 'Rio', 'Spectra',
-        'Granta', 'Гранта', 'Kalina', 'Калина', 'Priora', 'Приора', 
+        'Granta', 'Гранта', 'Kalina', 'Калина', 'Priora', 'Приора',
         '2110', '2112', '2115', '2107', '2114', 'Самара', 'S18'
     ]
     
     business_brands = ['Toyota', 'Honda', 'Mitsubishi', 'Subaru']
     business_models = [
-        'Camry', 'Corolla', 'RAV4', 'Avensis', 'Civic', 'Accord', 
+        'Camry', 'Corolla', 'RAV4', 'Avensis', 'Civic', 'Accord',
         'Qashqai', 'X-Trail', 'Tiguan', 'Passat CC', 'Passat',
         'CX-5', 'Outlander', 'Kyron', 'Legacy'
     ]
@@ -34,15 +33,12 @@ def detect_taxi_type(carname, carmodel):
     
     if carname in economy_brands or carmodel in economy_models:
         return "economy"
-    
     if carname in business_brands or carmodel in business_models:
         return "business"
-    
     if carname in ['LADA', 'Лада', 'ВАЗ (LADA)'] and carmodel in lada_comfort_models:
         return "comfort"
     
     return "comfort"
-
 
 def build_features_for_price(order_data, price_bid):
     """
@@ -52,11 +48,10 @@ def build_features_for_price(order_data, price_bid):
     Args:
         order_data: dict с информацией о заказе
         price_bid: float - тестируемая цена бида
-        
+    
     Returns:
         pd.DataFrame с одной строкой признаков
     """
-    
     # Создаём временный DataFrame для единообразия
     temp_df = pd.DataFrame([{
         'order_timestamp': order_data['order_timestamp'],
@@ -88,7 +83,7 @@ def build_features_for_price(order_data, price_bid):
     features['price_start_local'] = order_data['price_start_local']
     features['price_increase_abs'] = price_bid - order_data['price_start_local']
     features['price_increase_pct'] = ((price_bid - order_data['price_start_local']) / 
-                                      order_data['price_start_local'] * 100)
+                                       order_data['price_start_local'] * 100)
     features['is_price_increased'] = float(features['price_increase_pct'] > 0)
     
     # Нормализованные цены
@@ -212,11 +207,9 @@ def build_features_for_price(order_data, price_bid):
     features['price_inc_x_night'] = features['price_increase_pct'] * features['is_night']
     features['price_inc_x_peak'] = features['price_increase_pct'] * features['is_peak_hour']
     features['price_inc_x_weekend'] = features['price_increase_pct'] * features['is_weekend']
-    
     features['distance_x_night'] = features['distance_km'] * features['is_night']
     features['distance_x_weekend'] = features['distance_km'] * features['is_weekend']
     features['distance_x_peak'] = features['distance_km'] * features['is_peak_hour']
-    
     features['speed_x_peak'] = features['avg_speed_kmh'] * features['is_peak_hour']
     features['rating_x_price_inc'] = features['driver_rating'] * features['price_increase_pct']
     features['experience_x_price_inc'] = features['driver_experience_years'] * features['price_increase_pct']
@@ -226,7 +219,6 @@ def build_features_for_price(order_data, price_bid):
     
     return result
 
-
 def find_optimal_price(order_data, model, num_points=500):
     """
     Находит оптимальную цену максимизирующую Expected Revenue
@@ -235,22 +227,20 @@ def find_optimal_price(order_data, model, num_points=500):
         order_data: dict с информацией о заказе
         model: обученная модель
         num_points: количество точек для сканирования
-        
-    Returns:
-        dict с результатами оптимизации
-    """
     
+    Returns:
+        dict с результатами оптимизации в НОВОМ ФОРМАТЕ
+    """
     start_price = order_data['price_start_local']
     
-    # Диапазон сканирования: от 70% до 160% начальной цены
-    min_price = max(start_price * 0.7, 100)  # минимум 100₽
-    max_price = start_price * 1.6
+    # Диапазон сканирования: от start_price (минимум) до 2.5x (максимум)
+    min_price = start_price  # ИЗМЕНЕНО: минимум = start_price
+    max_price = start_price * 2.5
     
     # Генерируем цены для тестирования
     prices = np.linspace(min_price, max_price, num_points)
-    
     probabilities = []
-    expected_revenues = []
+    expected_values = []
     
     # Сканируем каждую цену
     for price in prices:
@@ -260,92 +250,151 @@ def find_optimal_price(order_data, model, num_points=500):
         # Предсказываем вероятность
         prob = model.predict_proba(features)[0, 1]
         
-        # Ожидаемый доход = цена × вероятность
-        expected_revenue = price * prob
+        # Expected value = цена × вероятность
+        expected_value = price * prob
         
         probabilities.append(prob)
-        expected_revenues.append(expected_revenue)
+        expected_values.append(expected_value)
     
-    # Находим оптимум
+    # Преобразуем в numpy массивы
     probabilities = np.array(probabilities)
-    expected_revenues = np.array(expected_revenues)
+    expected_values = np.array(expected_values)
     
-    best_idx = np.argmax(expected_revenues)
+    # Находим максимальную вероятность
+    max_probability = probabilities.max()
+    max_prob_price = prices[probabilities.argmax()]
+    
+    # Нормализация вероятностей (для normalized_probability_percent)
+    normalized_probabilities = (probabilities / max_probability) * 100
+    
+    # Находим оптимум по expected value
+    best_idx = np.argmax(expected_values)
     optimal_price = prices[best_idx]
     optimal_prob = probabilities[best_idx]
-    optimal_revenue = expected_revenues[best_idx]
+    optimal_normalized_prob = normalized_probabilities[best_idx]
+    optimal_expected_value = expected_values[best_idx]
     
-    # Создаём 5 ценовых зон
+    # ========================================================================
+    # СОЗДАНИЕ ЗОН (4-5 зон)
+    # ========================================================================
     zones = []
-    zone_colors = ['green', 'yellow-green', 'yellow', 'orange', 'red']
-    zone_names = ['Высокая вероятность', 'Хорошая цена', 'Средняя', 'Рискованная', 'Низкая вероятность']
     
-    # Разбиваем на 5 зон по вероятности
-    prob_quantiles = np.percentile(probabilities, [20, 40, 60, 80])
+    # Определяем границы зон на основе процентилей normalized_probability
+    # Зона 1-2: низкая вероятность (не выгодно водителю)
+    # Зона 3: оптимальная (баланс)
+    # Зона 4-5: высокая цена (не выгодно пассажиру)
     
-    for i, (color, name) in enumerate(zip(zone_colors, zone_names)):
-        if i == 0:
-            mask = probabilities >= prob_quantiles[3]
-        elif i == 1:
-            mask = (probabilities >= prob_quantiles[2]) & (probabilities < prob_quantiles[3])
-        elif i == 2:
-            mask = (probabilities >= prob_quantiles[1]) & (probabilities < prob_quantiles[2])
-        elif i == 3:
-            mask = (probabilities >= prob_quantiles[0]) & (probabilities < prob_quantiles[1])
-        else:
-            mask = probabilities < prob_quantiles[0]
+    # Разбиваем на 5 зон по цене (равномерно)
+    price_range = max_price - min_price
+    zone_size = price_range / 5
+    
+    zone_definitions = [
+        {
+            'zone_id': 1,
+            'zone_name': 'zone_1_red_low',
+            'price_from': min_price,
+            'price_to': min_price + zone_size
+        },
+        {
+            'zone_id': 2,
+            'zone_name': 'zone_2_yellow_low',
+            'price_from': min_price + zone_size,
+            'price_to': min_price + 2 * zone_size
+        },
+        {
+            'zone_id': 3,
+            'zone_name': 'zone_3_green',
+            'price_from': min_price + 2 * zone_size,
+            'price_to': min_price + 3 * zone_size
+        },
+        {
+            'zone_id': 4,
+            'zone_name': 'zone_4_yellow_high',
+            'price_from': min_price + 3 * zone_size,
+            'price_to': min_price + 4 * zone_size
+        },
+        {
+            'zone_id': 5,
+            'zone_name': 'zone_5_red_high',
+            'price_from': min_price + 4 * zone_size,
+            'price_to': max_price
+        }
+    ]
+    
+    # Вычисляем метрики для каждой зоны
+    for zone_def in zone_definitions:
+        mask = (prices >= zone_def['price_from']) & (prices <= zone_def['price_to'])
         
-        zone_prices = prices[mask]
-        zone_probs = probabilities[mask]
-        
-        if len(zone_prices) > 0:
+        if mask.sum() > 0:
+            zone_probs = probabilities[mask]
+            zone_norm_probs = normalized_probabilities[mask]
+            zone_exp_vals = expected_values[mask]
+            
+            # ИСПРАВЛЕНО: используем теоретические границы, а не min/max из данных
             zones.append({
-                'color': color,
-                'name': name,
-                'price_from': int(zone_prices.min()),
-                'price_to': int(zone_prices.max()),
-                'avg_probability': float(zone_probs.mean()),
-                'avg_revenue': float((zone_prices * zone_probs).mean())
+                'zone_id': zone_def['zone_id'],
+                'zone_name': zone_def['zone_name'],
+                'price_range': {
+                    'min': round(zone_def['price_from'], 2),  # ИСПОЛЬЗУЕМ ТЕОРЕТИЧЕСКУЮ ГРАНИЦУ
+                    'max': round(zone_def['price_to'], 2)     # ИСПОЛЬЗУЕМ ТЕОРЕТИЧЕСКУЮ ГРАНИЦУ
+                },
+                'metrics': {
+                    'avg_probability_percent': round(zone_probs.mean() * 100, 2),
+                    'avg_normalized_probability_percent': round(zone_norm_probs.mean(), 2),
+                    'avg_expected_value': round(zone_exp_vals.mean(), 2)
+                }
             })
     
+    # Определяем в какой зоне находится оптимальная цена
+    optimal_zone_id = None
+    for zone in zones:
+        if zone['price_range']['min'] <= optimal_price <= zone['price_range']['max']:
+            optimal_zone_id = zone['zone_id']
+            break
+    
+    # ========================================================================
+    # ФОРМИРОВАНИЕ РЕЗУЛЬТАТА В НОВОМ ФОРМАТЕ
+    # ========================================================================
     result = {
-        'optimal_price': int(optimal_price),
-        'optimal_probability': float(optimal_prob),
-        'expected_revenue': float(optimal_revenue),
-        'start_price': int(start_price),
-        'price_increase_pct': float((optimal_price - start_price) / start_price * 100),
         'zones': zones,
-        'scan_stats': {
-            'prices_tested': int(num_points),
-            'min_price': float(min_price),
-            'max_price': float(max_price),
-            'avg_probability': float(probabilities.mean()),
-            'max_probability': float(probabilities.max())
+        'optimal_price': {
+            'price': round(optimal_price, 2),
+            'probability_percent': round(optimal_prob * 100, 2),
+            'normalized_probability_percent': round(optimal_normalized_prob, 2),
+            'expected_value': round(optimal_expected_value, 2),
+            'zone_id': optimal_zone_id
+        },
+        'analysis': {
+            'start_price': float(start_price),
+            'max_probability_percent': round(max_probability * 100, 2),
+            'max_probability_price': round(max_prob_price, 2),
+            'scan_range': {
+                'min': float(min_price),
+                'max': float(max_price)
+            },
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
     }
     
     return result
 
-
 def recommend_price(order_data, output_json=True, model_path="model_enhanced.joblib"):
     """
     Главная функция рекомендации цены
-    """
     
+    Args:
+        order_data: dict с информацией о заказе
+        output_json: если True, возвращает JSON строку, иначе dict
+        model_path: путь к файлу модели
+    
+    Returns:
+        JSON строка или dict с рекомендацией
+    """
     # Загрузка модели
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"⚠️ Модель не найдена: {model_path}")
     
     model = joblib.load(model_path)
-    
-    # ОТЛАДКА: Проверяем что загрузили
-    print(f"  Тип загруженного объекта: {type(model)}")
-    if hasattr(model, 'predict_proba'):
-        print(f"  ✓ Модель имеет метод predict_proba")
-    else:
-        print(f"  ✗ ОШИБКА: Объект не имеет predict_proba!")
-        print(f"  Содержимое: {model}")
-        raise TypeError(f"Загружен неправильный объект: {type(model)}")
     
     # Валидация входных данных
     required_fields = [
@@ -365,10 +414,8 @@ def recommend_price(order_data, output_json=True, model_path="model_enhanced.job
     
     return result
 
-
 if __name__ == "__main__":
     # Пример использования
-    
     print("\n" + "="*70)
     print("ТЕСТ СИСТЕМЫ РЕКОМЕНДАЦИИ ЦЕН")
     print("="*70)
@@ -381,15 +428,15 @@ if __name__ == "__main__":
     # Тестовый заказ
     test_order = {
         "order_timestamp": int(datetime.now().timestamp()),
-        "distance_in_meters": 5000,
-        "duration_in_seconds": 900,
-        "pickup_in_meters": 1500,
-        "pickup_in_seconds": 200,
-        "driver_rating": 4.9,
+        "distance_in_meters": 12000,
+        "duration_in_seconds": 1600,
+        "pickup_in_meters": 2000,
+        "pickup_in_seconds": 120,
+        "driver_rating": 4.7,
         "platform": "android",
-        "price_start_local": 250,
-        "carname": "Toyota",
-        "carmodel": "Camry",
+        "price_start_local": 180,
+        "carname": "LADA",
+        "carmodel": "GRANTA",
         "driver_reg_date": "2020-01-15"
     }
     
@@ -400,20 +447,26 @@ if __name__ == "__main__":
     print(f"  Автомобиль: {test_order['carname']} {test_order['carmodel']}")
     
     print("\nПоиск оптимальной цены...")
+    
     result = recommend_price(test_order, output_json=False)
     
     print("\n" + "="*70)
     print("РЕЗУЛЬТАТЫ")
     print("="*70)
-    print(f"\n✅ Рекомендованная цена: {result['optimal_price']}₽")
-    print(f"   Вероятность принятия: {result['optimal_probability']*100:.1f}%")
-    print(f"   Ожидаемый доход: {result['expected_revenue']:.2f}₽")
-    print(f"   Наценка к начальной цене: {result['price_increase_pct']:+.1f}%")
+    print(f"\n✅ Рекомендованная цена: {result['optimal_price']['price']}₽")
+    print(f"   Вероятность принятия: {result['optimal_price']['probability_percent']}%")
+    print(f"   Нормализованная вероятность: {result['optimal_price']['normalized_probability_percent']}%")
+    print(f"   Ожидаемый доход: {result['optimal_price']['expected_value']:.2f}₽")
+    print(f"   Зона: {result['optimal_price']['zone_id']}")
     
     print("\nЦеновые зоны:")
     for zone in result['zones']:
-        print(f"  {zone['name']:25s} [{zone['color']:12s}] "
-              f"{zone['price_from']:4d}-{zone['price_to']:4d}₽ "
-              f"(вероятность: {zone['avg_probability']*100:4.1f}%)")
+        print(f"  Зона {zone['zone_id']} ({zone['zone_name']}): "
+              f"{zone['price_range']['min']:.2f}-{zone['price_range']['max']:.2f}₽ | "
+              f"P={zone['metrics']['avg_probability_percent']:.1f}% | "
+              f"NP={zone['metrics']['avg_normalized_probability_percent']:.1f}% | "
+              f"EV={zone['metrics']['avg_expected_value']:.0f}₽")
     
     print("\n" + "="*70)
+    print("\nJSON результат:")
+    print(recommend_price(test_order, output_json=True))

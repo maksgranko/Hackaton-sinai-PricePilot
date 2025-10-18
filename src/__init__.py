@@ -1,4 +1,3 @@
-# Пустой файл для Python package
 from . import train_model
 from . import recommend_price
 
