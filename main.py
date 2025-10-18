@@ -22,11 +22,11 @@ def main():
     
     order = {
         "order_timestamp": int(datetime.now().timestamp()),
-        "distance_in_meters": 3000,
-        "duration_in_seconds": 200,
+        "distance_in_meters": 12000,
+        "duration_in_seconds": 1600,
         "pickup_in_meters": 2000,
         "pickup_in_seconds": 120,
-        "driver_rating": 4.7,
+        "driver_rating": 4.8,
         "platform": "android",
         "price_start_local": 180,
         "carname": "LADA",
