@@ -26,6 +26,10 @@ class OrderRequest(BaseModel):
     carname: Optional[str] = None
     carmodel: Optional[str] = None
     driver_reg_date: Optional[str] = None
+    
+    # NEW: История для персонализации (опционально)
+    user_id: Optional[int] = Field(None, description="ID пользователя для персонализации")
+    driver_id: Optional[int] = Field(None, description="ID водителя для персонализации")
 
 
 class PriceRange(BaseModel):

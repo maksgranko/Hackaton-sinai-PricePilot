@@ -174,6 +174,16 @@ body {
   outline: none;
 }
 
+.location-input:read-only {
+  cursor: default;
+  opacity: 0.8;
+}
+
+.location-input:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .bottom-sheet {
   background-color: var(--container-bg);
   border-top-left-radius: 20px;
@@ -514,6 +524,11 @@ body {
   -moz-appearance: textfield;
   appearance: textfield;
   letter-spacing: 1px;
+}
+
+.price-input:read-only {
+  cursor: default;
+  opacity: 0.9;
 }
 
 .price-input::-webkit-outer-spin-button,
@@ -981,6 +996,16 @@ h3 {
   outline: none;
   border-color: var(--drivee-green);
   box-shadow: 0 0 0 3px rgba(140, 198, 63, 0.1);
+}
+
+.debug-json-container textarea:read-only {
+  cursor: default;
+  opacity: 0.7;
+  background: rgba(0, 0, 0, 0.05) !important;
+}
+
+.dark-theme .debug-json-container textarea:read-only {
+  background: rgba(255, 255, 255, 0.02) !important;
 }
 
 .debug-json-actions {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -16,6 +17,53 @@ WEBUI_DIR = Path(__file__).resolve().parent.parent / "webui"
 WEBUI_STATIC_DIR = WEBUI_DIR / "static"
 WEBUI_INDEX_FILE = WEBUI_DIR / "templates" / "index.html"
 CONFIG_PLACEHOLDER = "<!--__WEBUI_CONFIG__-->"
+
+
+def ensure_history_cache(force_rebuild: bool = False) -> None:
+    """
+    Проверяет наличие кэша истории и строит его при необходимости.
+    
+    Args:
+        force_rebuild: если True, пересоздать кэш принудительно
+    """
+    user_cache_path = Path("user_history.joblib")
+    driver_cache_path = Path("driver_history.joblib")
+    
+    # Проверка переменной окружения для принудительного пересоздания
+    force_rebuild = force_rebuild or os.getenv("REBUILD_CACHE", "").lower() in ("1", "true", "yes")
+    
+    # Проверяем наличие обоих файлов
+    if user_cache_path.exists() and driver_cache_path.exists() and not force_rebuild:
+        print(f"[CACHE] Кэш истории найден: {user_cache_path}, {driver_cache_path}")
+        return
+    
+    if force_rebuild:
+        print("[CACHE] Принудительное пересоздание кэша (REBUILD_CACHE=1)...")
+    
+    print("[CACHE] Кэш истории не найден. Строим автоматически...")
+    
+    try:
+        # Импортируем и запускаем построение кэша
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+        from build_history_cache import main as build_cache_main
+        
+        # Пробуем найти CSV файл
+        csv_path = "simple-train.csv"
+        if not Path(csv_path).exists():
+            csv_path = "simple-train shorted.csv"
+            if not Path(csv_path).exists():
+                print("[WARN] CSV файл не найден. Кэш не будет построен.")
+                print("[WARN] Будут использоваться средние значения.")
+                return
+        
+        # Строим кэш
+        build_cache_main(csv_path)
+        print("[CACHE] Кэш истории успешно построен!")
+        
+    except Exception as e:
+        print(f"[ERROR] Не удалось построить кэш истории: {e}")
+        print("[WARN] Будут использоваться средние значения.")
 
 
 def create_app() -> FastAPI:
@@ -34,6 +82,18 @@ def create_app() -> FastAPI:
 
     if WEBUI_STATIC_DIR.exists():
         application.mount("/assets", StaticFiles(directory=WEBUI_STATIC_DIR), name="webui-assets")
+
+    @application.on_event("startup")
+    async def startup_event():
+        """
+        Выполняется при запуске API.
+        Проверяет и строит кэш истории при необходимости.
+        """
+        print("\n" + "="*70)
+        print("ЗАПУСК API PRICEPILOT")
+        print("="*70)
+        ensure_history_cache()
+        print("="*70 + "\n")
 
     @application.get("/health", tags=["health"])
     async def health_check() -> dict[str, str]:

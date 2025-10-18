@@ -5,6 +5,106 @@ import json
 import os
 from datetime import datetime
 
+# Глобальные переменные для кэша истории
+_USER_HISTORY_CACHE = None
+_DRIVER_HISTORY_CACHE = None
+_HISTORY_DEFAULTS = None
+
+def load_history_cache():
+    """
+    Загружает кэш истории пользователей и водителей.
+    Вызывается один раз при импорте модуля.
+    """
+    global _USER_HISTORY_CACHE, _DRIVER_HISTORY_CACHE, _HISTORY_DEFAULTS
+    
+    if _USER_HISTORY_CACHE is not None:
+        return  # Уже загружено
+    
+    try:
+        _USER_HISTORY_CACHE = joblib.load('user_history.joblib')
+        _DRIVER_HISTORY_CACHE = joblib.load('driver_history.joblib')
+        
+        # Рассчитываем средние значения для fallback
+        _HISTORY_DEFAULTS = {
+            'user_order_count': float(_USER_HISTORY_CACHE['user_order_count'].mean()),
+            'user_acceptance_rate': float(_USER_HISTORY_CACHE['user_acceptance_rate'].mean()),
+            'user_avg_price_ratio': float(_USER_HISTORY_CACHE['user_avg_price_ratio'].mean()),
+            'user_is_new': float(_USER_HISTORY_CACHE['user_is_new'].mean()),
+            'user_is_vip': float(_USER_HISTORY_CACHE['user_is_vip'].mean()),
+            'user_is_price_sensitive': float(_USER_HISTORY_CACHE['user_is_price_sensitive'].mean()),
+            
+            'driver_bid_count': float(_DRIVER_HISTORY_CACHE['driver_bid_count'].mean()),
+            'driver_acceptance_rate': float(_DRIVER_HISTORY_CACHE['driver_acceptance_rate'].mean()),
+            'driver_avg_bid_ratio': float(_DRIVER_HISTORY_CACHE['driver_avg_bid_ratio'].mean()),
+            'driver_is_active': float(_DRIVER_HISTORY_CACHE['driver_is_active'].mean()),
+            'driver_is_aggressive': float(_DRIVER_HISTORY_CACHE['driver_is_aggressive'].mean()),
+            'driver_is_flexible': float(_DRIVER_HISTORY_CACHE['driver_is_flexible'].mean()),
+        }
+        
+        print(f"[CACHE] Загружен кэш истории: {len(_USER_HISTORY_CACHE)} users, {len(_DRIVER_HISTORY_CACHE)} drivers")
+    except FileNotFoundError:
+        print("[WARN] Кэш истории не найден. Используются заглушки. Запустите: python src/build_history_cache.py")
+        _USER_HISTORY_CACHE = pd.DataFrame()
+        _DRIVER_HISTORY_CACHE = pd.DataFrame()
+        _HISTORY_DEFAULTS = {
+            'user_order_count': 10.0,
+            'user_acceptance_rate': 0.41,
+            'user_avg_price_ratio': 1.18,
+            'user_is_new': 0.3,
+            'user_is_vip': 0.1,
+            'user_is_price_sensitive': 0.5,
+            'driver_bid_count': 20.0,
+            'driver_acceptance_rate': 0.43,
+            'driver_avg_bid_ratio': 1.15,
+            'driver_is_active': 0.5,
+            'driver_is_aggressive': 0.2,
+            'driver_is_flexible': 0.4,
+        }
+
+def get_user_features(user_id=None):
+    """
+    Получает признаки истории для user_id.
+    Если user_id не предоставлен или не найден, возвращает средние значения.
+    """
+    load_history_cache()
+    
+    if user_id is not None and not _USER_HISTORY_CACHE.empty:
+        user_row = _USER_HISTORY_CACHE[_USER_HISTORY_CACHE['user_id'] == user_id]
+        if not user_row.empty:
+            return {
+                'user_order_count': float(user_row['user_order_count'].iloc[0]),
+                'user_acceptance_rate': float(user_row['user_acceptance_rate'].iloc[0]),
+                'user_avg_price_ratio': float(user_row['user_avg_price_ratio'].iloc[0]),
+                'user_is_new': float(user_row['user_is_new'].iloc[0]),
+                'user_is_vip': float(user_row['user_is_vip'].iloc[0]),
+                'user_is_price_sensitive': float(user_row['user_is_price_sensitive'].iloc[0]),
+            }
+    
+    # Fallback на средние значения
+    return {k: v for k, v in _HISTORY_DEFAULTS.items() if k.startswith('user_')}
+
+def get_driver_features(driver_id=None):
+    """
+    Получает признаки истории для driver_id.
+    Если driver_id не предоставлен или не найден, возвращает средние значения.
+    """
+    load_history_cache()
+    
+    if driver_id is not None and not _DRIVER_HISTORY_CACHE.empty:
+        driver_row = _DRIVER_HISTORY_CACHE[_DRIVER_HISTORY_CACHE['driver_id'] == driver_id]
+        if not driver_row.empty:
+            return {
+                'driver_bid_count': float(driver_row['driver_bid_count'].iloc[0]),
+                'driver_acceptance_rate': float(driver_row['driver_acceptance_rate'].iloc[0]),
+                'driver_avg_bid_ratio': float(driver_row['driver_avg_bid_ratio'].iloc[0]),
+                'driver_is_active': float(driver_row['driver_is_active'].iloc[0]),
+                'driver_is_aggressive': float(driver_row['driver_is_aggressive'].iloc[0]),
+                'driver_is_flexible': float(driver_row['driver_is_flexible'].iloc[0]),
+            }
+    
+    # Fallback на средние значения
+    return {k: v for k, v in _HISTORY_DEFAULTS.items() if k.startswith('driver_')}
+
 def calculate_fuel_cost(distance_in_meters, fuel_consumption_per_100km=9.0, fuel_price_per_liter=55.0):
     """
     Рассчитывает стоимость топлива для поездки.
@@ -193,6 +293,50 @@ def build_features_for_price(order_data, price_bid, reference_price):
     features['fuel_ratio_x_peak'] = features['price_to_fuel_ratio'] * features['is_peak_hour']
     features['net_profit_x_rating'] = features['net_profit'] * features['driver_rating']
     
+    # 👤 НОВЫЕ ПРИЗНАКИ: История пользователя (РЕАЛЬНЫЕ ДАННЫЕ!)
+    user_id = order_data.get('user_id')
+    user_features = get_user_features(user_id)
+    features['user_order_count'] = user_features['user_order_count']
+    features['user_acceptance_rate'] = user_features['user_acceptance_rate']
+    features['user_avg_price_ratio'] = user_features['user_avg_price_ratio']
+    features['user_is_new'] = user_features['user_is_new']
+    features['user_is_vip'] = user_features['user_is_vip']
+    features['user_is_price_sensitive'] = user_features['user_is_price_sensitive']
+    
+    # 🚗 НОВЫЕ ПРИЗНАКИ: История водителя (РЕАЛЬНЫЕ ДАННЫЕ!)
+    driver_id = order_data.get('driver_id')
+    driver_features = get_driver_features(driver_id)
+    features['driver_bid_count'] = driver_features['driver_bid_count']
+    features['driver_acceptance_rate'] = driver_features['driver_acceptance_rate']
+    features['driver_avg_bid_ratio'] = driver_features['driver_avg_bid_ratio']
+    features['driver_is_active'] = driver_features['driver_is_active']
+    features['driver_is_aggressive'] = driver_features['driver_is_aggressive']
+    features['driver_is_flexible'] = driver_features['driver_is_flexible']
+    
+    # 🔗 НОВЫЕ ПРИЗНАКИ: Взаимодействия истории
+    features['user_driver_match_score'] = features['user_acceptance_rate'] * features['driver_acceptance_rate']
+    features['price_vs_user_avg'] = price_bid / (features['user_order_count'] * 20 + 0.1)  # Примерная оценка
+    features['price_vs_driver_avg'] = price_bid / (features['driver_bid_count'] * 10 + 0.1)  # Примерная оценка
+    
+    # 🗺️ НОВЫЕ ПРИЗНАКИ: Улучшенные признаки маршрута
+    features['route_efficiency'] = features['distance_km'] / (features['duration_min'] + 0.1)  # км/мин
+    features['is_very_short'] = float(features['distance_km'] < 1)
+    features['is_very_long'] = float(features['distance_km'] > 20)
+    features['pickup_burden'] = features['pickup_km'] / (features['distance_km'] + 0.1)  # Насколько подача нагружает
+    
+    # ⏰ НОВЫЕ ПРИЗНАКИ: Временные паттерны
+    try:
+        from datetime import datetime
+        dt = datetime.fromtimestamp(order_data['order_timestamp'])
+        day_of_month = dt.day
+    except:
+        day_of_month = 15  # Середина месяца по умолчанию
+    
+    features['day_of_month'] = float(day_of_month)
+    features['is_month_start'] = float(day_of_month <= 5)  # Начало месяца (зарплата)
+    features['is_month_end'] = float(day_of_month >= 25)  # Конец месяца
+    features['hour_quartile'] = float(h // 6)  # 0: 0-6, 1: 6-12, 2: 12-18, 3: 18-24
+    
     result = pd.DataFrame([features])
     return result
 
@@ -210,10 +354,11 @@ def find_optimal_price(order_data, model, num_points=500):
     reference_price = estimate_reference_price(order_data)
     
     search_min = min(user_min_price, reference_price * 0.5)
-    # Ограничиваем максимальную цену разумными пределами
-    search_max = min(reference_price * 2.5, user_min_price * 2.0, 800)  # Максимум 800₽
+    # Расширяем диапазон для поиска всех зон (убираем жесткое ограничение)
+    search_max = max(reference_price * 3.0, user_min_price * 2.5)
     
-    test_prices = np.linspace(search_min, search_max, 100)
+    # Убираем ограничение в 800₽, чтобы найти все зоны
+    test_prices = np.linspace(search_min, search_max, 150)
     test_probs = []
     for price in test_prices:
         features = build_features_for_price(order_data, price, reference_price)
@@ -221,25 +366,28 @@ def find_optimal_price(order_data, model, num_points=500):
         test_probs.append(prob)
     
     test_probs = np.array(test_probs)
-    prob_threshold = 0.10  # Повышаем порог до 10%
+    prob_threshold = 0.05  # Понижаем порог для поиска красных зон
     valid_indices = test_probs >= prob_threshold
     if valid_indices.any():
         max_price = test_prices[valid_indices][-1]
     else:
-        max_price = min(reference_price * 1.5, user_min_price * 1.8, 600)  # Максимум 600₽
+        max_price = reference_price * 2.0
     
+    # 🚀 ОПТИМИЗАЦИЯ: Увеличиваем точек для плавной кривой вероятности
     prices = np.linspace(search_min, max_price, num_points)
-    probabilities = []
-    expected_values = []
+    
+    # Создаем все признаки сразу (batch)
+    all_features = []
     for price in prices:
         features = build_features_for_price(order_data, price, reference_price)
-        prob = model.predict_proba(features)[0, 1]
-        expected_value = price * prob
-        probabilities.append(prob)
-        expected_values.append(expected_value)
+        all_features.append(features)
     
-    probabilities = np.array(probabilities)
-    expected_values = np.array(expected_values)
+    # Объединяем в один DataFrame для batch prediction
+    features_batch = pd.concat(all_features, ignore_index=True)
+    
+    # Batch prediction - намного быстрее!
+    probabilities = model.predict_proba(features_batch)[:, 1]
+    expected_values = prices * probabilities
     
     valid_mask = prices >= user_min_price
     if not valid_mask.any():
@@ -253,14 +401,20 @@ def find_optimal_price(order_data, model, num_points=500):
     normalized_probs = probabilities / max_prob if max_prob > 0 else probabilities
     valid_normalized_probs = normalized_probs[valid_mask]
     
-    best_idx = np.argmax(valid_expected_values)
+    # 🎯 УЛУЧШЕНИЕ: Ищем баланс между EV и вероятностью
+    # Взвешенная оптимизация: 70% EV + 30% probability
+    weighted_score = (0.7 * (valid_expected_values / valid_expected_values.max()) + 
+                     0.3 * valid_normalized_probs)
+    best_idx = np.argmax(weighted_score)
+    
     optimal_price = valid_prices[best_idx]
     optimal_prob = valid_probs[best_idx]
     optimal_normalized_prob = valid_normalized_probs[best_idx]
     optimal_expected_value = valid_expected_values[best_idx]
     
-    max_prob_idx = np.argmax(probabilities)
-    max_prob_price = prices[max_prob_idx]
+    # Находим цену с максимальной вероятностью
+    max_prob_idx = np.argmax(valid_probs)
+    max_prob_price = valid_prices[max_prob_idx]
     
     # Определяем зоны на основе ВЕРОЯТНОСТИ принятия, а не EV
     # Это гарантирует, что цвета привязаны к шансам принятия цены

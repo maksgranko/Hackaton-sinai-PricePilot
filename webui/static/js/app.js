@@ -178,10 +178,21 @@ function computePriceBoundsFromData(data) {
     const min = Number(firstZone.price_range.min);
     const zonesMax = Number(lastZone.price_range.max);
     
-    // Расширяем диапазон на 50% выше последней зоны, 
-    // чтобы показать красные/жёлтые зоны с низкой вероятностью
-    const extension = (zonesMax - min) * 0.5;
-    const max = zonesMax + Math.max(extension, 100); // минимум +100₽
+    // Проверяем, есть ли красная зона (zone_id = 0 или 1)
+    const hasRedZone = data.zones.some(z => z.zone_id === 0 || z.zone_id === 1);
+    
+    // Если есть красная зона - бэкенд уже нашел весь диапазон, добавляем небольшой буфер
+    // Если нет - расширяем больше, чтобы показать возможные красные зоны
+    let max;
+    if (hasRedZone) {
+      // Есть красная зона - добавляем только 10-15% буфера
+      const extension = (zonesMax - min) * 0.15;
+      max = zonesMax + Math.max(extension, 50);
+    } else {
+      // Нет красной зоны - расширяем на 30% для визуализации
+      const extension = (zonesMax - min) * 0.3;
+      max = zonesMax + Math.max(extension, 100);
+    }
     
     const stepCandidate = Number(data?.analysis?.price_increment ?? state.priceStep ?? 5);
     const step = stepCandidate > 0 ? stepCandidate : 5;
@@ -314,15 +325,23 @@ function updateClientDetailsFromOrder() {
   const detailsSpan = document.querySelector(".client-details span");
   if (!detailsSpan) return;
   
-  const rating = order.driver_rating != null ? parseFloat(order.driver_rating).toFixed(1) : "5.0";
-  const distanceKm = order.distance_in_meters != null 
+  // Расстояние и время до клиента (подача)
+  const pickupKm = order.pickup_in_meters != null 
+    ? (order.pickup_in_meters / 1000).toFixed(1) 
+    : "2.0";
+  const pickupMin = order.pickup_in_seconds != null 
+    ? Math.round(order.pickup_in_seconds / 60) 
+    : "2";
+  
+  // Расстояние и время поездки
+  const tripKm = order.distance_in_meters != null 
     ? (order.distance_in_meters / 1000).toFixed(1) 
     : "12.0";
-  const timeMin = order.duration_in_seconds != null 
+  const tripMin = order.duration_in_seconds != null 
     ? Math.round(order.duration_in_seconds / 60) 
     : "25";
   
-  detailsSpan.innerHTML = `<i class="fas fa-star" style="color: var(--warning-color); margin-right: 3px"></i>${rating} Рейтинг | ${distanceKm} км | ${timeMin} мин`;
+  detailsSpan.innerHTML = `<i class="fas fa-map-marker-alt" style="color: var(--info-color); margin-right: 3px"></i>${pickupKm} км • ${pickupMin} мин до клиента<br><i class="fas fa-route" style="color: var(--drivee-green); margin-right: 3px"></i>${tripKm} км • ${tripMin} мин в пути`;
   
   // Обновляем время прибытия до клиента
   updatePickupTime();

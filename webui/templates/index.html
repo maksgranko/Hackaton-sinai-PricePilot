@@ -41,7 +41,8 @@
                 class="location-input"
                 placeholder="Откуда забираем клиента?"
                 value="Улица Воронеча В.И., 30+5"
-                onchange="logAction('From location changed to: ' + this.value)"
+                readonly
+                disabled
               />
             </div>
             <div class="pickup-time" id="pickup-time">
@@ -57,7 +58,8 @@
                 class="location-input"
                 placeholder="Куда везём?"
                 value="ул. Яхонтовая, 1"
-                onchange="logAction('To location changed to: ' + this.value)"
+                readonly
+                disabled
               />
             </div>
             <div class="pickup-time" id="trip-duration">
@@ -77,7 +79,7 @@
         <section class="debug-section">
           <h3>Raw JSON injector</h3>
           <div id="debug-json-container" class="debug-json-container">
-            <textarea id="debug-json-input" spellcheck="false" placeholder='{"price_start_local":210,"distance_in_meters":4200}'></textarea>
+            <textarea id="debug-json-input" spellcheck="false" placeholder='{"price_start_local":210,"distance_in_meters":4200}' readonly></textarea>
             <div class="debug-json-actions">
               <button class="debug-button apply" onclick="applyJsonOverride()">Apply JSON</button>
               <button class="debug-button clear" onclick="clearJsonEditor()">Clear</button>
@@ -162,6 +164,7 @@
                   value="378"
                   pattern="[0-9]*"
                   inputmode="numeric"
+                  readonly
                 />
                 <button class="price-spinner-button" onclick="changePrice(5)">+</button>
               </div>

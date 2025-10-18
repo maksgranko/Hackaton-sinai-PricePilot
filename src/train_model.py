@@ -30,6 +30,70 @@ def calculate_fuel_cost(distance_in_meters, fuel_consumption_per_100km=9.0, fuel
         'distance_km': distance_km
     }
 
+def calculate_user_history_features(df):
+    """
+    Рассчитывает признаки истории пользователя (user_id).
+    
+    Args:
+        df: DataFrame с историческими данными
+    
+    Returns:
+        DataFrame с признаками истории для каждого user_id
+    """
+    user_stats = df.groupby('user_id').agg({
+        'is_done': ['count', lambda x: (x == 'done').sum()],  # Всего заказов и принятых
+        'price_bid_local': 'mean',  # Средняя цена ставки
+        'price_start_local': 'mean',  # Средняя стартовая цена
+    }).reset_index()
+    
+    user_stats.columns = ['user_id', 'user_order_count', 'user_done_count', 
+                          'user_avg_bid', 'user_avg_start_price']
+    
+    # Процент принятых заказов
+    user_stats['user_acceptance_rate'] = user_stats['user_done_count'] / user_stats['user_order_count']
+    
+    # Средний коэффициент наценки
+    user_stats['user_avg_price_ratio'] = user_stats['user_avg_bid'] / (user_stats['user_avg_start_price'] + 0.1)
+    
+    # Категориальные признаки
+    user_stats['user_is_new'] = (user_stats['user_order_count'] <= 5).astype(float)
+    user_stats['user_is_vip'] = (user_stats['user_order_count'] >= 20).astype(float)
+    user_stats['user_is_price_sensitive'] = (user_stats['user_avg_price_ratio'] < 1.1).astype(float)
+    
+    return user_stats
+
+def calculate_driver_history_features(df):
+    """
+    Рассчитывает признаки истории водителя (driver_id).
+    
+    Args:
+        df: DataFrame с историческими данными
+    
+    Returns:
+        DataFrame с признаками истории для каждого driver_id
+    """
+    driver_stats = df.groupby('driver_id').agg({
+        'is_done': ['count', lambda x: (x == 'done').sum()],  # Всего ставок и принятых
+        'price_bid_local': 'mean',  # Средняя ставка
+        'price_start_local': 'mean',  # Средняя стартовая цена
+    }).reset_index()
+    
+    driver_stats.columns = ['driver_id', 'driver_bid_count', 'driver_done_count',
+                            'driver_avg_bid', 'driver_avg_start_price']
+    
+    # Процент принятых ставок
+    driver_stats['driver_acceptance_rate'] = driver_stats['driver_done_count'] / driver_stats['driver_bid_count']
+    
+    # Средний коэффициент наценки водителя
+    driver_stats['driver_avg_bid_ratio'] = driver_stats['driver_avg_bid'] / (driver_stats['driver_avg_start_price'] + 0.1)
+    
+    # Категориальные признаки
+    driver_stats['driver_is_active'] = (driver_stats['driver_bid_count'] >= 20).astype(float)
+    driver_stats['driver_is_aggressive'] = (driver_stats['driver_avg_bid_ratio'] > 1.2).astype(float)
+    driver_stats['driver_is_flexible'] = (driver_stats['driver_avg_bid_ratio'] < 1.1).astype(float)
+    
+    return driver_stats
+
 def clean_and_validate_data(df, verbose=True, keep_only_done=False):
     initial_count = len(df)
     
@@ -189,6 +253,44 @@ def detect_taxi_type(carname, carmodel):
     return "comfort"
 
 def build_enhanced_features(frame):
+    """
+    Создает признаки для ML-модели.
+    
+    Args:
+        frame: DataFrame с данными заказов
+    
+    Returns:
+        DataFrame с признаками
+    """
+    # 📊 НОВЫЕ ПРИЗНАКИ: История пользователей и водителей
+    user_history = calculate_user_history_features(frame)
+    driver_history = calculate_driver_history_features(frame)
+    
+    # Объединяем с основными данными
+    frame = frame.merge(user_history, on='user_id', how='left')
+    frame = frame.merge(driver_history, on='driver_id', how='left')
+    
+    # Заполняем пропуски для новых пользователей/водителей
+    frame['user_order_count'] = frame['user_order_count'].fillna(1)
+    frame['user_done_count'] = frame['user_done_count'].fillna(0)
+    frame['user_acceptance_rate'] = frame['user_acceptance_rate'].fillna(0.5)
+    frame['user_avg_bid'] = frame['user_avg_bid'].fillna(frame['price_bid_local'])
+    frame['user_avg_start_price'] = frame['user_avg_start_price'].fillna(frame['price_start_local'])
+    frame['user_avg_price_ratio'] = frame['user_avg_price_ratio'].fillna(1.0)
+    frame['user_is_new'] = frame['user_is_new'].fillna(1.0)
+    frame['user_is_vip'] = frame['user_is_vip'].fillna(0.0)
+    frame['user_is_price_sensitive'] = frame['user_is_price_sensitive'].fillna(0.5)
+    
+    frame['driver_bid_count'] = frame['driver_bid_count'].fillna(1)
+    frame['driver_done_count'] = frame['driver_done_count'].fillna(0)
+    frame['driver_acceptance_rate'] = frame['driver_acceptance_rate'].fillna(0.5)
+    frame['driver_avg_bid'] = frame['driver_avg_bid'].fillna(frame['price_bid_local'])
+    frame['driver_avg_start_price'] = frame['driver_avg_start_price'].fillna(frame['price_start_local'])
+    frame['driver_avg_bid_ratio'] = frame['driver_avg_bid_ratio'].fillna(1.0)
+    frame['driver_is_active'] = frame['driver_is_active'].fillna(0.5)
+    frame['driver_is_aggressive'] = frame['driver_is_aggressive'].fillna(0.0)
+    frame['driver_is_flexible'] = frame['driver_is_flexible'].fillna(0.5)
+    
     ts = pd.to_datetime(frame["order_timestamp"], errors="coerce")
     hour = ts.dt.hour.fillna(0)
     wday = ts.dt.weekday.fillna(0)
@@ -330,6 +432,40 @@ def build_enhanced_features(frame):
     features['fuel_ratio_x_distance'] = features['price_to_fuel_ratio'] * features['distance_km']
     features['fuel_ratio_x_peak'] = features['price_to_fuel_ratio'] * features['is_peak_hour']
     features['net_profit_x_rating'] = net_profit * features['driver_rating']
+    
+    # 👤 НОВЫЕ ПРИЗНАКИ: История пользователя
+    features['user_order_count'] = frame['user_order_count'].values
+    features['user_acceptance_rate'] = frame['user_acceptance_rate'].values
+    features['user_avg_price_ratio'] = frame['user_avg_price_ratio'].values
+    features['user_is_new'] = frame['user_is_new'].values
+    features['user_is_vip'] = frame['user_is_vip'].values
+    features['user_is_price_sensitive'] = frame['user_is_price_sensitive'].values
+    
+    # 🚗 НОВЫЕ ПРИЗНАКИ: История водителя
+    features['driver_bid_count'] = frame['driver_bid_count'].values
+    features['driver_acceptance_rate'] = frame['driver_acceptance_rate'].values
+    features['driver_avg_bid_ratio'] = frame['driver_avg_bid_ratio'].values
+    features['driver_is_active'] = frame['driver_is_active'].values
+    features['driver_is_aggressive'] = frame['driver_is_aggressive'].values
+    features['driver_is_flexible'] = frame['driver_is_flexible'].values
+    
+    # 🔗 НОВЫЕ ПРИЗНАКИ: Взаимодействия истории
+    features['user_driver_match_score'] = features['user_acceptance_rate'] * features['driver_acceptance_rate']
+    features['price_vs_user_avg'] = frame['price_bid_local'].values / (frame['user_avg_bid'].values + 0.1)
+    features['price_vs_driver_avg'] = frame['price_bid_local'].values / (frame['driver_avg_bid'].values + 0.1)
+    
+    # 🗺️ НОВЫЕ ПРИЗНАКИ: Улучшенные признаки маршрута
+    features['route_efficiency'] = features['distance_km'] / (features['duration_min'] + 0.1)  # км/мин
+    features['is_very_short'] = (features['distance_km'] < 1).astype(float)
+    features['is_very_long'] = (features['distance_km'] > 20).astype(float)
+    features['pickup_burden'] = features['pickup_km'] / (features['distance_km'] + 0.1)  # Насколько подача нагружает
+    
+    # ⏰ НОВЫЕ ПРИЗНАКИ: Временные паттерны
+    day_of_month = ts.dt.day.fillna(15)
+    features['day_of_month'] = day_of_month.values
+    features['is_month_start'] = (day_of_month <= 5).astype(float).values  # Начало месяца (зарплата)
+    features['is_month_end'] = (day_of_month >= 25).astype(float).values  # Конец месяца (деньги кончаются)
+    features['hour_quartile'] = (hour // 6).astype(float).values  # 0: 0-6, 1: 6-12, 2: 12-18, 3: 18-24
     
     result = pd.DataFrame(features)
     
