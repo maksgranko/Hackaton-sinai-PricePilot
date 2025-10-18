@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>PricePilot Pro - Умный помощник Drivee</title>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/css/style.css" />
+  </head>
+  <body>
+    <div class="app-container" id="app-container">
+      <div class="map-area">
+        <div class="header">
+          <button id="debug-toggle-button" title="Debug menu"><i class="fas fa-bug"></i></button>
+          <div style="display: flex; gap: 10px">
+            <button onclick="toggleTheme()" title="Переключить тему">
+              <i class="fas fa-sun" id="theme-icon"></i>
+            </button>
+            <button onclick="exitOrder()" class="exit-button" title="Выйти из заказа">
+              <i class="fas fa-arrow-right"></i>
+            </button>
+          </div>
+        </div>
+        <div class="location-input-container">
+          <i class="fas fa-search"></i>
+          <input
+            type="text"
+            id="location-input"
+            class="location-input"
+            value="Улица Воронеча В.И., 30+5 → ул. Яхонтовая, 1"
+            onchange="logAction('Location changed to: ' + this.value)"
+          />
+        </div>
+      </div>
+
+      <div class="debug-overlay" id="debug-overlay"></div>
+      <aside class="debug-panel" id="debug-panel">
+        <div class="debug-header">
+          <h2>Dev Debugger</h2>
+          <button class="debug-close" onclick="toggleDebugPanel(false)">&times;</button>
+        </div>
+        <section class="debug-section">
+          <h3>Car Setup</h3>
+          <label class="debug-label">
+            Car brand
+            <select id="debug-carname" class="debug-select">
+              <option value="">Default fleet</option>
+              <option value="Toyota">Toyota</option>
+              <option value="Volkswagen">Volkswagen</option>
+              <option value="Hyundai">Hyundai</option>
+              <option value="Nissan">Nissan</option>
+              <option value="Skoda">Skoda</option>
+              <option value="Kia">Kia</option>
+              <option value="Renault">Renault</option>
+              <option value="Ford">Ford</option>
+              <option value="Geely">Geely</option>
+              <option value="Chery">Chery</option>
+            </select>
+          </label>
+        </section>
+        <section class="debug-section">
+          <h3>Raw JSON injector</h3>
+          <div id="debug-json-container" class="debug-json-container">
+            <textarea id="debug-json-input" spellcheck="false" placeholder='{"price_start_local":210,"distance_in_meters":4200}'></textarea>
+            <div class="debug-json-actions">
+              <button class="debug-button apply" onclick="applyJsonOverride()">Apply JSON</button>
+              <button class="debug-button clear" onclick="clearJsonEditor()">Clear</button>
+            </div>
+            <div id="debug-json-status" class="debug-status"></div>
+          </div>
+        </section>
+        <section class="debug-section">
+          <h3>Lottery mode</h3>
+          <label class="debug-toggle">
+            <input type="checkbox" id="debug-lottery-toggle" onchange="toggleLotteryMode(this.checked)" />
+            <span>Simulate client decisions (uses normalized probability)</span>
+          </label>
+          <div id="debug-lottery-log" class="debug-status"></div>
+        </section>
+        <section class="debug-section">
+          <h3>Auth</h3>
+          <button class="debug-button" onclick="refreshToken()">Refresh JWT</button>
+          <div id="debug-token-status" class="debug-status"></div>
+        </section>
+      </aside>
+
+      <div class="bottom-sheet" id="bottom-sheet">
+        <div class="handle-bar"></div>
+
+        <div class="order-info">
+          <div class="client-avatar">ИЛ</div>
+          <div class="client-details">
+            <strong
+              >Иван Лунин
+              <i
+                class="fas fa-check-circle"
+                style="color: var(--drivee-green); font-size: 14px; margin-left: 5px"
+              ></i
+            ></strong>
+            <span
+              ><i class="fas fa-star" style="color: var(--warning-color); margin-right: 3px"></i
+              >4.9 Рейтинг | 12.0 км | 25 мин</span
+            >
+          </div>
+        </div>
+
+        <div class="pricepilot-panel">
+          <div class="button-group">
+            <button class="accept-button" id="accept-start-price-button">
+              Принять за 180₽
+            </button>
+            <button class="analysis-button" onclick="showAnalysis()">
+              <i class="fas fa-chart-line"></i> Анализ
+            </button>
+          </div>
+
+          <div class="bid-section">
+            <h4>
+              <span>Предложите свою цену:</span>
+              <span class="optimal-price-text" id="optimal-price-text"
+                ><i class="fas fa-magic"></i>378₽</span
+              >
+            </h4>
+
+            <div class="price-slider-container">
+              <div class="price-scale" id="price-scale">
+                <div class="price-pointer" id="price-pointer">
+                  <span class="price-label-float" id="pointer-float-label">
+                    378₽ (42.72% P)
+                  </span>
+                </div>
+              </div>
+              <div class="price-labels">
+                <span id="label-min-price">180₽ (Мин)</span>
+                <span id="label-avg-price">315₽</span>
+                <span id="label-max-price">450₽ (Макс)</span>
+              </div>
+            </div>
+
+            <div class="bid-controls">
+              <div class="price-input-group">
+                <button class="price-spinner-button" onclick="changePrice(-5)">-</button>
+                <input
+                  type="number"
+                  id="price-bid"
+                  class="price-input"
+                  value="378"
+                  pattern="[0-9]*"
+                  inputmode="numeric"
+                />
+                <button class="price-spinner-button" onclick="changePrice(5)">+</button>
+              </div>
+
+              <button class="confirm-bid-button" onclick="confirmBid()" title="Предложить цену">
+                &#x2714;
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="analysis-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <span class="close-button" onclick="closeModal()">&times;</span>
+        </div>
+
+        <h2>Детальный Анализ PricePilot</h2>
+
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <h4>Оптимальная Цена (EV)</h4>
+            <p id="optimal-price-value" class="zone-yellow">378.36 ₽</p>
+            <span id="optimal-price-expected-value">Ожидаемая Выгода: 161.64 ₽</span>
+          </div>
+
+          <div class="metric-card">
+            <h4>Прогноз P(is_done)</h4>
+            <p id="optimal-price-prob">42.72%</p>
+            <span id="optimal-price-zone-score"
+              ><strong class="zone-yellow">YELLOW</strong> | Score: 3</span
+            >
+          </div>
+
+          <div class="metric-card">
+            <h4>Цена Макс. Вероятности</h4>
+            <p id="max-prob-price-value" class="zone-green">54.0 ₽</p>
+            <span>Вероятность: <strong id="max-prob">56.15%</strong></span>
+          </div>
+
+          <div class="metric-card">
+            <h4>Текущая Ставка</h4>
+            <p id="current-bid-value">378 ₽</p>
+            <span id="current-bid-expected-value">Ожид. Выгода: 161.64 ₽</span>
+          </div>
+        </div>
+
+        <h3>Зоновые Рекомендации</h3>
+        <div class="analysis-table-container">
+          <table class="analysis-table">
+            <thead>
+              <tr>
+                <th>Зона/Score</th>
+                <th>Диапазон Цен (₽)</th>
+                <th>P(is_done) Avg</th>
+                <th>Выгода (₽) Avg</th>
+                <th>Нормализация</th>
+              </tr>
+            </thead>
+            <tbody id="recommendations-body"></tbody>
+          </table>
+        </div>
+
+        <h4 style="margin-top: 20px">Интерпретация Нормализации</h4>
+        <p style="font-size: 13px; line-height: 1.5; padding: 0 5px; opacity: 0.8">
+          Нормализованная вероятность (0-100%) показывает, насколько выбранная зона близка к
+          <strong>максимально достижимой вероятности</strong> для этого заказа (56.15% при 54₽).
+        </p>
+      </div>
+    </div>
+
+    <!--__WEBUI_CONFIG__-->
+    <script src="/assets/js/app.js" type="module"></script>
+  </body>
+</html>
