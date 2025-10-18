@@ -17,14 +17,16 @@ const DEMO_ACCOUNT = {
 
 const BASE_ORDER = {
   order_timestamp: Math.floor(Date.now() / 1000),
-  distance_in_meters: 3404,
-  duration_in_seconds: 486,
-  pickup_in_meters: 790,
-  pickup_in_seconds: 169,
-  driver_rating: 5,
+  distance_in_meters: 12000,
+  duration_in_seconds: 1600,
+  pickup_in_meters: 2000,
+  pickup_in_seconds: 120,
+  driver_rating: 4.8,
   platform: "android",
   price_start_local: 180,
-  carname: "",
+  carname: "LADA",
+  carmodel: "GRANTA",
+  driver_reg_date: "2020-01-15",
   ...(CONFIG.orderDefaults || {}),
 };
 
@@ -37,6 +39,12 @@ if (BASE_ORDER.driver_rating != null) {
 if (BASE_ORDER.carname == null) {
   BASE_ORDER.carname = "";
 }
+if (BASE_ORDER.carmodel == null) {
+  BASE_ORDER.carmodel = "";
+}
+if (BASE_ORDER.driver_reg_date == null) {
+  BASE_ORDER.driver_reg_date = "";
+}
 
 const state = {
   token: null,
@@ -47,8 +55,6 @@ const state = {
   priceStep: 5,
   ready: false,
   debugPanelVisible: false,
-  lotteryEnabled: false,
-  lastLotteryOutcome: null,
 };
 
 let pricePointer;
@@ -117,6 +123,28 @@ function formatCurrency(value) {
   return `${Number(value).toFixed(0)}₽`;
 }
 
+function normalizeTimestamp(value) {
+  if (value == null) {
+    return Math.floor(Date.now() / 1000);
+  }
+  
+  // If it's already a number (Unix timestamp), return it
+  if (typeof value === 'number') {
+    return Math.floor(value);
+  }
+  
+  // If it's a string, try to parse it as a date
+  if (typeof value === 'string') {
+    const date = new Date(value);
+    if (!isNaN(date.getTime())) {
+      return Math.floor(date.getTime() / 1000);
+    }
+  }
+  
+  // Fallback to current timestamp
+  return Math.floor(Date.now() / 1000);
+}
+
 function setDebugStatus(elementId, message, variant = "") {
   const el = document.getElementById(elementId);
   if (!el) return;
@@ -162,23 +190,18 @@ function enrichData(data) {
   if (!data.price_probabilities) {
     data.price_probabilities = {};
   }
+  if (!data.recommendations) {
+    data.recommendations = [];
+  }
+  if (!data.zones) {
+    data.zones = [];
+  }
   return data;
 }
 
 function syncDebugControls() {
   const panel = document.getElementById("debug-panel");
   if (!panel) return;
-  const carSelect = document.getElementById("debug-carname");
-  if (carSelect) {
-    const value = state.order.carname ?? "";
-    if (carSelect.value !== value) {
-      carSelect.value = value;
-    }
-  }
-  const lotteryToggle = document.getElementById("debug-lottery-toggle");
-  if (lotteryToggle) {
-    lotteryToggle.checked = state.lotteryEnabled;
-  }
 }
 
 function toggleDebugPanel(force) {
@@ -222,6 +245,10 @@ async function applyJsonOverride() {
       ...state.order,
       ...overrides,
     };
+    
+    // Normalize order_timestamp (string datetime or number)
+    state.order.order_timestamp = normalizeTimestamp(state.order.order_timestamp);
+    
     if (state.order.price_start_local != null) {
       state.order.price_start_local = Number(state.order.price_start_local);
     }
@@ -231,58 +258,24 @@ async function applyJsonOverride() {
     if (state.order.carname == null) {
       state.order.carname = "";
     }
-    console.log("📊 JSON override applied. driver_rating:", state.order.driver_rating, "type:", typeof state.order.driver_rating);
-    setDebugStatus("debug-json-status", "JSON overrides applied.", "success");
+    if (state.order.carmodel == null) {
+      state.order.carmodel = "";
+    }
+    if (state.order.driver_reg_date == null) {
+      state.order.driver_reg_date = "";
+    }
+    console.log("📊 JSON override applied:", state.order);
+    setDebugStatus("debug-json-status", "JSON overrides applied. Fetching new data...", "success");
     logAction("JSON override applied via debugger.");
     const targetPrice =
       Number(state.order.price_start_local) || state.priceMin || BASE_ORDER.price_start_local;
     await activeBidUpdate(targetPrice);
     updateClientDetailsFromOrder();
+    setDebugStatus("debug-json-status", "JSON overrides applied successfully!", "success");
   } catch (error) {
     console.error(error);
     setDebugStatus("debug-json-status", `Override failed: ${error.message}`, "error");
   }
-}
-
-async function handleCarSelection(event) {
-  const value = event?.target?.value ?? "";
-  state.order = {
-    ...state.order,
-    carname: value,
-  };
-  logAction(`Car brand set to "${value || "default"}" via debugger.`);
-  const targetPrice =
-    Number(state.order.price_start_local) || state.priceMin || BASE_ORDER.price_start_local;
-  try {
-    await activeBidUpdate(targetPrice);
-  } catch (error) {
-    console.error(error);
-    setDebugStatus("debug-json-status", `Car update failed: ${error.message}`, "error");
-  }
-}
-
-function toggleLotteryMode(enabled) {
-  state.lotteryEnabled = enabled;
-  const message = enabled
-    ? "Lottery mode enabled. Client decision will be simulated."
-    : "Lottery mode disabled.";
-  setDebugStatus("debug-lottery-log", message, enabled ? "success" : "");
-  logAction(`Lottery mode ${enabled ? "enabled" : "disabled"}.`);
-  if (!enabled) {
-    state.lastLotteryOutcome = null;
-  }
-}
-
-function runLotterySimulation(response) {
-  if (!state.lotteryEnabled || !response?.optimal_price) {
-    return;
-  }
-  const chance = Number(response.optimal_price.normalized_probability_percent || 0) / 100;
-  const roll = Math.random();
-  const accepted = roll <= chance;
-  const message = `${new Date().toLocaleTimeString()} — ${accepted ? "client ACCEPTED" : "client REJECTED"} @ ${response.optimal_price.price}₽ (chance ${(chance * 100).toFixed(1)}%, roll ${(roll * 100).toFixed(1)}%)`;
-  setDebugStatus("debug-lottery-log", message, accepted ? "success" : "error");
-  state.lastLotteryOutcome = { accepted, chance, roll };
 }
 
 async function refreshToken() {
@@ -609,14 +602,13 @@ function applyDataToUi(data) {
   state.ready = true;
   logAction("PricePilot data synced with UI");
   syncDebugControls();
-  runLotterySimulation(state.data);
 }
 
 async function bootstrap() {
   try {
     const initialOrder = {
       ...state.order,
-      order_timestamp: Math.floor(Date.now() / 1000),
+      order_timestamp: normalizeTimestamp(state.order.order_timestamp),
     };
     state.order = initialOrder;
     const data = await requestPricing(initialOrder);
@@ -781,14 +773,29 @@ async function acceptCurrentPrice() {
 async function activeBidUpdate(targetPrice) {
   try {
     const normalizedPrice = Number(targetPrice);
+    
+    // Update only necessary fields, keep all others from state.order
     state.order = {
       ...state.order,
       price_start_local: normalizedPrice,
-      order_timestamp: Math.floor(Date.now() / 1000),
-      carname: state.order.carname ?? "",
-      driver_rating: state.order.driver_rating != null ? parseFloat(state.order.driver_rating) : 5.0,
+      order_timestamp: normalizeTimestamp(state.order.order_timestamp || Date.now() / 1000),
     };
-    console.log("🚀 Sending request to API. driver_rating:", state.order.driver_rating, "type:", typeof state.order.driver_rating);
+    
+    // Ensure correct types for critical fields
+    if (state.order.carname == null) {
+      state.order.carname = "";
+    }
+    if (state.order.carmodel == null) {
+      state.order.carmodel = "";
+    }
+    if (state.order.driver_reg_date == null) {
+      state.order.driver_reg_date = "";
+    }
+    if (state.order.driver_rating != null) {
+      state.order.driver_rating = parseFloat(state.order.driver_rating);
+    }
+    
+    console.log("🚀 Sending request to API with order:", state.order);
     const freshData = await requestPricing(state.order);
     applyDataToUi(freshData);
     updatePointerAndDisplay(normalizedPrice);
@@ -854,7 +861,6 @@ function wireGlobalHandlers() {
   window.logAction = logAction;
   window.applyJsonOverride = applyJsonOverride;
   window.clearJsonEditor = clearJsonEditor;
-  window.toggleLotteryMode = toggleLotteryMode;
   window.refreshToken = refreshToken;
   window.toggleDebugPanel = toggleDebugPanel;
 }
@@ -878,11 +884,6 @@ document.addEventListener("DOMContentLoaded", () => {
   bindModalDismiss();
   wireGlobalHandlers();
 
-  const carSelect = document.getElementById("debug-carname");
-  if (carSelect) {
-    carSelect.value = state.order.carname ?? "";
-    carSelect.addEventListener("change", handleCarSelection);
-  }
   const debugToggleButton = document.getElementById("debug-toggle-button");
   if (debugToggleButton) {
     debugToggleButton.addEventListener("click", () => toggleDebugPanel(!state.debugPanelVisible));

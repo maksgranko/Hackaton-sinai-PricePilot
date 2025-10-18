@@ -115,6 +115,24 @@ DUMMY_RESPONSE: Dict[str, Any] = {
     },
 }
 
+def _convert_order_to_dict(order: schemas.OrderRequest) -> Dict[str, Any]:
+    """Convert OrderRequest to dict format expected by ML module."""
+    # Get all fields from Pydantic model
+    order_dict = order.model_dump(exclude_none=False)
+    
+    # Convert enum to string value
+    if "platform" in order_dict and hasattr(order_dict["platform"], "value"):
+        order_dict["platform"] = order.platform.value
+    elif "platform" not in order_dict:
+        order_dict["platform"] = order.platform.value
+    
+    # Ensure float types for numeric fields
+    order_dict["driver_rating"] = float(order.driver_rating)
+    order_dict["price_start_local"] = float(order.price_start_local)
+    
+    return order_dict
+
+
 @lru_cache(maxsize=1)
 def _load_ml_callable() -> Optional[ModelCallable]:
     module_path = settings.ml_module_path
@@ -173,7 +191,12 @@ async def call_pricing_model(order: schemas.OrderRequest) -> schemas.ModelRespon
         return _build_stub_response(order)
 
     try:
-        result = handler(order)
+        # Convert OrderRequest to dict format expected by ML module
+        order_dict = _convert_order_to_dict(order)
+        
+        # Call handler with output_json=False to get dict instead of JSON string
+        result = handler(order_dict, output_json=False)
+        
         if inspect.isawaitable(result):
             result = await result  # type: ignore[assignment]
         return _coerce_model_response(result)

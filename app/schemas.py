@@ -21,6 +21,11 @@ class OrderRequest(BaseModel):
     driver_rating: confloat(ge=1.0, le=5.0) = Field(..., description="Rating on a 1.0-5.0 scale.")
     platform: PlatformEnum
     price_start_local: confloat(ge=0)
+    
+    # Optional fields that ML model can use
+    carname: Optional[str] = None
+    carmodel: Optional[str] = None
+    driver_reg_date: Optional[str] = None
 
 
 class PriceRange(BaseModel):
@@ -86,8 +91,8 @@ class ModelResponse(BaseModel):
     zones: List[Zone]
     optimal_price: OptimalPrice
     analysis: ModelAnalysis
-    price_probabilities: Dict[str, PriceProbability]
-    recommendations: List[Recommendation]
+    price_probabilities: Optional[Dict[str, PriceProbability]] = None
+    recommendations: Optional[List[Recommendation]] = None
 
 
 class User(BaseModel):
