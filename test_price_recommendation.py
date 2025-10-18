@@ -20,14 +20,13 @@ def main():
         "driver_rating": 5,
         "platform": "android",
         "price_start_local": 180,
-        "carname": "LADA",
-        "carmodel": "GRANTA",
-        "driver_reg_date": "2020-01-15"
     }
     
-    result_json = recommend_price(order, output_json=True)
+    result_json = recommend_price(order, output_format='json')
     result = json.loads(result_json)
     
+
+
     print("\n" + "="*70)
     print("📊 РЕЗУЛЬТАТЫ АНАЛИЗА")
     print("="*70)

@@ -1,4 +1,8 @@
-from . import train_model
-from . import recommend_price
+"""
+ML-система рекомендации цен для такси
+"""
 
-__all__ = ['train_model', 'recommend_price']
+from .train_model import train_model
+from .recommend_price import recommend_price, predict
+
+__all__ = ['train_model', 'recommend_price', 'predict']
