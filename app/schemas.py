@@ -52,9 +52,6 @@ class OptimalPrice(BaseModel):
     normalized_probability_percent: float = Field(..., ge=0, le=100)
     expected_value: float = Field(..., ge=0)
     zone_id: int = Field(..., ge=0)
-    zone: Optional[str] = None
-    score: Optional[int] = None
-    zone_name: Optional[str] = None
 
 
 class ScanRange(BaseModel):

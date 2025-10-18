@@ -366,11 +366,71 @@ function extractZoneColor(zoneName) {
   return "green"; // fallback
 }
 
+function updatePriceScaleGradient(data) {
+  if (!data || !data.zones) return;
+  
+  const scaleEl = document.getElementById("price-scale");
+  if (!scaleEl) return;
+  
+  // Сортируем зоны по минимальной цене
+  const sortedZones = data.zones.slice().sort((a, b) => a.price_range.min - b.price_range.min);
+  
+  // Создаем градиент на основе реальных позиций зон
+  let gradientStops = [];
+  
+  sortedZones.forEach((zone, index) => {
+    const minPos = ((zone.price_range.min - state.priceMin) / (state.priceMax - state.priceMin)) * 100;
+    const maxPos = ((zone.price_range.max - state.priceMin) / (state.priceMax - state.priceMin)) * 100;
+    
+    // Определяем цвет зоны
+    let color;
+    if (zone.zone_name.includes("green")) {
+      color = "#28a745"; // Зелёный
+    } else if (zone.zone_name.includes("yellow")) {
+      color = "#f39c12"; // Жёлтый
+    } else if (zone.zone_name.includes("red")) {
+      color = "#e74c3c"; // Красный
+    } else {
+      color = "#6c757d"; // Серый по умолчанию
+    }
+    
+    // Добавляем точки градиента для начала и конца зоны
+    gradientStops.push(`${color} ${minPos}%`);
+    gradientStops.push(`${color} ${maxPos}%`);
+  });
+  
+  // Если есть пустые области, заполняем их красным (низкая вероятность)
+  if (sortedZones.length > 0) {
+    const firstZone = sortedZones[0];
+    const lastZone = sortedZones[sortedZones.length - 1];
+    
+    const firstMinPos = ((firstZone.price_range.min - state.priceMin) / (state.priceMax - state.priceMin)) * 100;
+    const lastMaxPos = ((lastZone.price_range.max - state.priceMin) / (state.priceMax - state.priceMin)) * 100;
+    
+    // Добавляем красные области в начале и конце, если нужно
+    if (firstMinPos > 0) {
+      gradientStops.unshift("#c0392b 0%", "#c0392b " + firstMinPos + "%");
+    }
+    if (lastMaxPos < 100) {
+      gradientStops.push("#c0392b " + lastMaxPos + "%", "#c0392b 100%");
+    }
+  } else {
+    // Если зон нет, делаем всё красным
+    gradientStops = ["#c0392b 0%", "#c0392b 100%"];
+  }
+  
+  const gradient = `linear-gradient(to right, ${gradientStops.join(", ")})`;
+  scaleEl.style.background = gradient;
+}
+
 function renderZoneMarkers(data) {
   if (!data || !data.zones) return;
   
   const scaleEl = document.getElementById("price-scale");
   if (!scaleEl) return;
+  
+  // Обновляем градиент в зависимости от зон
+  updatePriceScaleGradient(data);
   
   // Удаляем старые маркеры зон
   const oldMarkers = scaleEl.querySelectorAll(".zone-marker");
