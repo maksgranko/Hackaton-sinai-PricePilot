@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  pricepilot:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - SECRET_KEY=your-secret-key-here
+      - ACCESS_TOKEN_EXPIRE_MINUTES=60
+      - TEST_USER_EMAIL=demo@example.com
+      - TEST_USER_PASSWORD=demo
+      - WEBUI_USERNAME=demo@example.com
+      - WEBUI_PASSWORD=demo
+      - REBUILD_CACHE=0
+    volumes:
+      # Монтируем CSV файлы для построения кэша
+      - ./simple-train.csv:/app/simple-train.csv:ro
+      - ./simple-train shorted.csv:/app/simple-train shorted.csv:ro
+      # Монтируем модели (если есть)
+      - ./model_enhanced.joblib:/app/model_enhanced.joblib:ro
+      - ./feature_names.joblib:/app/feature_names.joblib:ro
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.5"
+        reservations:
+          memory: 512M
+          cpus: "0.25"

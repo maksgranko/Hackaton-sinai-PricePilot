@@ -1,22 +1,62 @@
-# Игнорируем файлы Git
+# Git
 .git
 .gitignore
 
-# Игнорируем кэш и временные файлы
-__pycache__
-*.pyc
-*.pyo
-*.pyd
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Игнорируем файлы среды разработки
-.env
-venv
-env
+# Virtual environments
+venv/
+env/
+ENV/
 
-# Игнорируем логи и модели
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
 *.log
-*.joblib
 
-# Игнорируем файлы IDE
-.vscode
-.idea
+# Documentation
+*.md
+docs/
+
+# Test files
+test_*.py
+*_test.py
+tests/
+
+# Development files
+.env
+.env.local
+.env.development
+.env.test
+
+# Temporary files
+*.tmp
+*.temp
