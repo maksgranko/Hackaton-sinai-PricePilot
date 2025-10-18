@@ -208,6 +208,9 @@ async function applyJsonOverride() {
     if (state.order.price_start_local != null) {
       state.order.price_start_local = Number(state.order.price_start_local);
     }
+    if (state.order.driver_rating != null) {
+      state.order.driver_rating = parseFloat(state.order.driver_rating);
+    }
     if (state.order.carname == null) {
       state.order.carname = "";
     }
@@ -216,6 +219,7 @@ async function applyJsonOverride() {
     const targetPrice =
       Number(state.order.price_start_local) || state.priceMin || BASE_ORDER.price_start_local;
     await activeBidUpdate(targetPrice);
+    updateClientDetailsFromOrder();
   } catch (error) {
     console.error(error);
     setDebugStatus("debug-json-status", `Override failed: ${error.message}`, "error");
@@ -274,6 +278,22 @@ async function refreshToken() {
   }
 }
 
+function updateClientDetailsFromOrder() {
+  const order = state.order;
+  const detailsSpan = document.querySelector(".client-details span");
+  if (!detailsSpan) return;
+  
+  const rating = order.driver_rating != null ? parseFloat(order.driver_rating).toFixed(1) : "5.0";
+  const distanceKm = order.distance_in_meters != null 
+    ? (order.distance_in_meters / 1000).toFixed(1) 
+    : "12.0";
+  const timeMin = order.duration_in_seconds != null 
+    ? Math.round(order.duration_in_seconds / 60) 
+    : "25";
+  
+  detailsSpan.innerHTML = `<i class="fas fa-star" style="color: var(--warning-color); margin-right: 3px"></i>${rating} Рейтинг | ${distanceKm} км | ${timeMin} мин`;
+}
+
 function hydrateSummaryPanels(data) {
   const optimal = data.optimal_price;
   const analysis = data.analysis;
@@ -281,20 +301,90 @@ function hydrateSummaryPanels(data) {
   document.getElementById("accept-start-price-button").textContent = `Принять за ${formatCurrency(
     analysis.start_price
   )}`;
-  document.getElementById("label-min-price").textContent = `${formatCurrency(
-    state.priceMin
-  )} (Мин)`;
-  document.getElementById("label-avg-price").textContent = `${formatCurrency(
-    (state.priceMin + state.priceMax) / 2
-  )}`;
-  document.getElementById("label-max-price").textContent = `${formatCurrency(
-    state.priceMax
-  )} (Макс)`;
+  
+  // Обновляем метки min/max цены в зависимости от зон
+  if (data.zones && data.zones.length > 0) {
+    const firstZone = data.zones[0];
+    const lastZone = data.zones[data.zones.length - 1];
+    
+    document.getElementById("label-min-price").textContent = `${formatCurrency(
+      firstZone.price_range.min
+    )} (Мин)`;
+    document.getElementById("label-avg-price").textContent = `${formatCurrency(
+      (firstZone.price_range.min + lastZone.price_range.max) / 2
+    )}`;
+    document.getElementById("label-max-price").textContent = `${formatCurrency(
+      lastZone.price_range.max
+    )} (Макс)`;
+  } else {
+    document.getElementById("label-min-price").textContent = `${formatCurrency(
+      state.priceMin
+    )} (Мин)`;
+    document.getElementById("label-avg-price").textContent = `${formatCurrency(
+      (state.priceMin + state.priceMax) / 2
+    )}`;
+    document.getElementById("label-max-price").textContent = `${formatCurrency(
+      state.priceMax
+    )} (Макс)`;
+  }
 
   const optimalPriceRounded = Math.round(optimal.price / state.priceStep) * state.priceStep;
   document.getElementById(
     "optimal-price-text"
   ).innerHTML = `<i class="fas fa-magic"></i>${optimalPriceRounded}₽`;
+  
+  renderZoneMarkers(data);
+}
+
+function extractZoneColor(zoneName) {
+  // Извлекаем цвет из названия зоны типа "zone_3_green" или "zone_1_red_low"
+  if (zoneName.includes("green")) return "green";
+  if (zoneName.includes("yellow")) return "yellow";
+  if (zoneName.includes("red")) return "red";
+  return "green"; // fallback
+}
+
+function renderZoneMarkers(data) {
+  if (!data || !data.zones) return;
+  
+  const scaleEl = document.getElementById("price-scale");
+  if (!scaleEl) return;
+  
+  // Удаляем старые маркеры зон
+  const oldMarkers = scaleEl.querySelectorAll(".zone-marker");
+  oldMarkers.forEach(m => m.remove());
+  
+  // Создаём маркеры для каждой зоны
+  data.zones.forEach((zone) => {
+    const minPos = ((zone.price_range.min - state.priceMin) / (state.priceMax - state.priceMin)) * 100;
+    const maxPos = ((zone.price_range.max - state.priceMin) / (state.priceMax - state.priceMin)) * 100;
+    
+    if (minPos < 0 || maxPos > 100 || minPos >= maxPos) return;
+    
+    const zoneColor = extractZoneColor(zone.zone_name);
+    const marker = document.createElement("div");
+    marker.className = `zone-marker zone-${zoneColor}`;
+    marker.style.left = `${minPos}%`;
+    marker.style.width = `${maxPos - minPos}%`;
+    marker.title = `${zone.zone_name.toUpperCase()}: ${zone.price_range.min.toFixed(0)}-${zone.price_range.max.toFixed(0)}₽ (${zone.metrics.avg_probability_percent.toFixed(1)}%)`;
+    
+    scaleEl.appendChild(marker);
+  });
+  
+  // Если зон меньше 5, всё что после последней зоны - красная зона
+  if (data.zones.length > 0) {
+    const lastZone = data.zones[data.zones.length - 1];
+    const lastZoneEnd = ((lastZone.price_range.max - state.priceMin) / (state.priceMax - state.priceMin)) * 100;
+    
+    if (lastZoneEnd < 100) {
+      const redMarker = document.createElement("div");
+      redMarker.className = "zone-marker zone-red";
+      redMarker.style.left = `${lastZoneEnd}%`;
+      redMarker.style.width = `${100 - lastZoneEnd}%`;
+      redMarker.title = `Красная зона: ${lastZone.price_range.max.toFixed(0)}-${state.priceMax.toFixed(0)}₽ (низкая вероятность)`;
+      scaleEl.appendChild(redMarker);
+    }
+  }
 }
 
 function updatePointerStyle(zone) {
@@ -312,42 +402,46 @@ function updatePointerStyle(zone) {
 
 function getPriceData(price) {
   ensureDataReady();
-  const probabilities = state.data.price_probabilities || {};
-  const entries = Object.entries(probabilities);
-
-  if (!entries.length) {
-    const fallback = state.data.optimal_price;
-    return {
-      price,
-      probability: Number(fallback.probability_percent),
-      expected_value: Number(fallback.expected_value),
-      zone: fallback.zone || "green",
-    };
-  }
-
-  let closest = entries[0];
-  let minDiff = Math.abs(Number(entries[0][0]) - price);
-
-  for (const entry of entries.slice(1)) {
-    const diff = Math.abs(Number(entry[0]) - price);
-    if (diff < minDiff) {
-      minDiff = diff;
-      closest = entry;
+  
+  // Определяем зону на основе цены
+  let foundZone = null;
+  if (state.data.zones) {
+    for (const zone of state.data.zones) {
+      if (price >= zone.price_range.min && price <= zone.price_range.max) {
+        foundZone = zone;
+        break;
+      }
     }
   }
-
-  const basePrice = Number(closest[0]);
-  const baseData = closest[1];
-  const diffFromBase = price - basePrice;
-
-  const probAdjustment = diffFromBase * 0.05;
-  const evAdjustment = diffFromBase * 0.4;
-
+  
+  // Если зона найдена, используем её данные
+  if (foundZone) {
+    const zoneColor = extractZoneColor(foundZone.zone_name);
+    return {
+      price,
+      probability: Number(foundZone.metrics.avg_probability_percent),
+      expected_value: Number(foundZone.metrics.avg_expected_value),
+      zone: zoneColor,
+    };
+  }
+  
+  // Если цена вне всех зон или зон нет, используем оптимальную цену как fallback
+  const fallback = state.data.optimal_price;
+  let fallbackZone = "green";
+  
+  // Если цена больше максимальной зоны - красная
+  if (state.data.zones && state.data.zones.length > 0) {
+    const lastZone = state.data.zones[state.data.zones.length - 1];
+    if (price > lastZone.price_range.max) {
+      fallbackZone = "red";
+    }
+  }
+  
   return {
     price,
-    probability: Math.max(0, baseData.prob + probAdjustment),
-    expected_value: Math.max(0, baseData.ev + evAdjustment),
-    zone: baseData.zone,
+    probability: Number(fallback.probability_percent || 0),
+    expected_value: Number(fallback.expected_value || 0),
+    zone: fallbackZone,
   };
 }
 
@@ -379,19 +473,20 @@ function createRecommendationsTable(data) {
   const tbody = document.getElementById("recommendations-body");
   tbody.innerHTML = "";
 
-  (data.recommendations || [])
+  (data.zones || [])
     .slice()
-    .sort((a, b) => b.score - a.score)
-    .forEach((rec) => {
+    .sort((a, b) => a.zone_id - b.zone_id)
+    .forEach((zone) => {
       const tr = document.createElement("tr");
-      const zoneClass = `zone-${rec.zone}`;
+      const zoneColor = extractZoneColor(zone.zone_name);
+      const zoneClass = `zone-${zoneColor}`;
 
       tr.innerHTML = `
-        <td class="${zoneClass}">${rec.zone.toUpperCase()} (${rec.score})</td>
-        <td>${rec.price_range.min.toFixed(2)} - ${rec.price_range.max.toFixed(2)}</td>
-        <td>${rec.avg_probability_percent.toFixed(2)}%</td>
-        <td>${rec.avg_expected_value.toFixed(2)}</td>
-        <td>${rec.normalized_probability_percent.toFixed(2)}%</td>
+        <td class="${zoneClass}">${zone.zone_name.toUpperCase()} (ID: ${zone.zone_id})</td>
+        <td>${zone.price_range.min.toFixed(2)} - ${zone.price_range.max.toFixed(2)}</td>
+        <td>${zone.metrics.avg_probability_percent.toFixed(2)}%</td>
+        <td>${zone.metrics.avg_expected_value.toFixed(2)}</td>
+        <td>${zone.metrics.avg_normalized_probability_percent.toFixed(2)}%</td>
       `;
 
       tbody.appendChild(tr);
@@ -412,16 +507,32 @@ function refreshAnalysisModal() {
     2
   )}%`;
 
-  const zoneLabel = (optimal.zone || optimal.zone_name || "N/A").toUpperCase();
-  const score = optimal.score ?? "-";
+  // Определяем зону по zone_id из optimal_price
+  let zoneLabel = "N/A";
+  let zoneColor = "green";
+  if (optimal.zone_id && state.data.zones) {
+    const optimalZone = state.data.zones.find(z => z.zone_id === optimal.zone_id);
+    if (optimalZone) {
+      zoneLabel = optimalZone.zone_name.toUpperCase();
+      zoneColor = extractZoneColor(optimalZone.zone_name);
+    }
+  }
+  
   document.getElementById(
     "optimal-price-zone-score"
-  ).innerHTML = `<strong class="zone-${optimal.zone || "green"}">${zoneLabel}</strong> | Score: ${score}`;
+  ).innerHTML = `<strong class="zone-${zoneColor}">${zoneLabel}</strong> | ID: ${optimal.zone_id ?? "-"}`;
 
   document.getElementById("max-prob-price-value").textContent = `${analysis.max_probability_price.toFixed(
     0
   )} ₽`;
   document.getElementById("max-prob").textContent = `${analysis.max_probability_percent.toFixed(2)}%`;
+
+  // Обновляем описание нормализации с актуальными данными
+  const normDesc = document.getElementById("normalization-description");
+  if (normDesc) {
+    normDesc.innerHTML = `Нормализованная вероятность (0-100%) показывает, насколько выбранная зона близка к
+      <strong>максимально достижимой вероятности</strong> для этого заказа (${analysis.max_probability_percent.toFixed(2)}% при ${analysis.max_probability_price.toFixed(0)}₽).`;
+  }
 
   createRecommendationsTable(state.data);
 }
@@ -439,6 +550,7 @@ function applyDataToUi(data) {
   };
 
   hydrateSummaryPanels(state.data);
+  updateClientDetailsFromOrder();
 
   const initialPrice = Math.round(state.data.optimal_price.price / state.priceStep) * state.priceStep;
   updatePointerAndDisplay(initialPrice);
@@ -488,11 +600,13 @@ function bindPointerEvents() {
     event.preventDefault();
   });
 
-  document.addEventListener("mouseup", () => {
+  document.addEventListener("mouseup", async () => {
     if (isDragging) {
       isDragging = false;
       pricePointer.classList.remove("dragging");
-      logAction(`Price Bid set manually via slider to: ${priceInput.value} ₽`);
+      const price = parseInt(priceInput.value, 10);
+      logAction(`Price Bid set manually via slider to: ${price} ₽`);
+      await activeBidUpdate(price);
     }
   });
 
@@ -512,11 +626,13 @@ function bindPointerEvents() {
     { passive: true }
   );
 
-  document.addEventListener("touchend", () => {
+  document.addEventListener("touchend", async () => {
     if (isDragging) {
       isDragging = false;
       pricePointer.classList.remove("dragging");
-      logAction(`Price Bid set manually via slider (Touch) to: ${priceInput.value} ₽`);
+      const price = parseInt(priceInput.value, 10);
+      logAction(`Price Bid set manually via slider (Touch) to: ${price} ₽`);
+      await activeBidUpdate(price);
     }
   });
 
@@ -527,7 +643,7 @@ function bindPointerEvents() {
 }
 
 function bindInputEvents() {
-  priceInput.addEventListener("change", () => {
+  priceInput.addEventListener("change", async () => {
     if (!state.ready) return;
     let price = parseInt(priceInput.value, 10);
     if (Number.isNaN(price)) {
@@ -539,6 +655,7 @@ function bindInputEvents() {
 
     updatePointerAndDisplay(price);
     logAction(`Price Bid changed via manual input to: ${price} ₽`);
+    await activeBidUpdate(price);
   });
 }
 
@@ -546,7 +663,34 @@ async function acceptStartPrice() {
   try {
     ensureDataReady();
     const startPrice = Number(state.data.analysis.start_price);
-    activeBidUpdate(startPrice);
+    
+    // Получаем данные для стартовой цены
+    const priceData = getPriceData(startPrice);
+    const chance = Number(priceData.probability) / 100;
+    const roll = Math.random();
+    const accepted = roll <= chance;
+    
+    // Показываем результат симуляции
+    const acceptButton = document.getElementById("accept-start-price-button");
+    const originalText = acceptButton.textContent;
+    const originalColor = acceptButton.style.backgroundColor;
+    
+    if (accepted) {
+      acceptButton.textContent = "✓ Клиент ПРИНЯЛ!";
+      acceptButton.style.backgroundColor = "var(--drivee-green)";
+      logAction(`Virtual client ACCEPTED ${startPrice}₽ (chance ${(chance * 100).toFixed(1)}%, roll ${(roll * 100).toFixed(1)}%)`);
+    } else {
+      acceptButton.textContent = "✗ Клиент ОТКЛОНИЛ";
+      acceptButton.style.backgroundColor = "var(--danger-color)";
+      logAction(`Virtual client REJECTED ${startPrice}₽ (chance ${(chance * 100).toFixed(1)}%, roll ${(roll * 100).toFixed(1)}%)`);
+    }
+    
+    // Возвращаем кнопку к нормальному виду через 2 секунды
+    setTimeout(() => {
+      acceptButton.textContent = originalText;
+      acceptButton.style.backgroundColor = originalColor;
+    }, 2000);
+    
   } catch (error) {
     console.error(error);
     alert(error.message);
@@ -572,21 +716,6 @@ async function activeBidUpdate(targetPrice) {
   }
 }
 
-async function confirmBid() {
-  if (!state.ready) {
-    alert("Данные еще не загружены.");
-    return;
-  }
-
-  const bidPrice = parseInt(priceInput.value, 10);
-  if (Number.isNaN(bidPrice)) {
-    alert("Пожалуйста, введите цену.");
-    return;
-  }
-
-  logAction(`Bid Confirmed: ${bidPrice} ₽. Запрашиваем пересчет.`);
-  await activeBidUpdate(bidPrice);
-}
 
 function exitOrder() {
   logAction("Exit button clicked.");
@@ -600,7 +729,7 @@ function toggleTheme() {
   logAction(`Theme Switched to: ${isDark ? "Dark" : "Light"}`);
 }
 
-function changePrice(delta) {
+async function changePrice(delta) {
   if (!state.ready) return;
   let currentPrice = parseInt(priceInput.value || 0, 10);
   if (Number.isNaN(currentPrice)) currentPrice = state.priceMin;
@@ -612,6 +741,7 @@ function changePrice(delta) {
   priceInput.value = newPrice;
   updatePointerAndDisplay(newPrice);
   logAction(`Price adjusted by button: ${newPrice} ₽`);
+  await activeBidUpdate(newPrice);
 }
 
 function openMenu() {
@@ -635,7 +765,6 @@ function wireGlobalHandlers() {
   window.exitOrder = exitOrder;
   window.toggleTheme = toggleTheme;
   window.changePrice = changePrice;
-  window.confirmBid = confirmBid;
   window.acceptStartPrice = acceptStartPrice;
   window.showAnalysis = showAnalysis;
   window.closeModal = closeModal;
