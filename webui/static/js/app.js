@@ -408,39 +408,99 @@ function updatePointerStyle(zone) {
   pointer.style.boxShadow = `0 0 10px ${color}`;
 }
 
+function interpolateProbability(price, zone, prevZone, nextZone) {
+  const zoneMin = zone.price_range.min;
+  const zoneMax = zone.price_range.max;
+  const zoneProb = Number(zone.metrics.avg_normalized_probability_percent);
+  
+  // Позиция внутри зоны (0 = начало, 1 = конец)
+  const positionInZone = (price - zoneMin) / (zoneMax - zoneMin || 1);
+  
+  // Вероятности на границах зоны
+  let probAtMin = zoneProb;
+  let probAtMax = zoneProb;
+  
+  // Если есть предыдущая зона - интерполируем с её вероятностью на границе
+  if (prevZone) {
+    const prevProb = Number(prevZone.metrics.avg_normalized_probability_percent);
+    probAtMin = (prevProb + zoneProb) / 2;
+  }
+  
+  // Если есть следующая зона - интерполируем с её вероятностью на границе
+  if (nextZone) {
+    const nextProb = Number(nextZone.metrics.avg_normalized_probability_percent);
+    probAtMax = (nextProb + zoneProb) / 2;
+  }
+  
+  // Линейная интерполяция между границами
+  return probAtMin + (probAtMax - probAtMin) * positionInZone;
+}
+
 function getPriceData(price) {
   ensureDataReady();
   
   // Определяем зону на основе цены
   let foundZone = null;
+  let zoneIndex = -1;
   if (state.data.zones) {
-    for (const zone of state.data.zones) {
+    for (let i = 0; i < state.data.zones.length; i++) {
+      const zone = state.data.zones[i];
       if (price >= zone.price_range.min && price <= zone.price_range.max) {
         foundZone = zone;
+        zoneIndex = i;
         break;
       }
     }
   }
   
-  // Если зона найдена, используем её данные с нормализованной вероятностью
+  // Если зона найдена, используем интерполированную вероятность
   if (foundZone) {
+    const prevZone = zoneIndex > 0 ? state.data.zones[zoneIndex - 1] : null;
+    const nextZone = zoneIndex < state.data.zones.length - 1 ? state.data.zones[zoneIndex + 1] : null;
+    
+    const interpolatedProb = interpolateProbability(price, foundZone, prevZone, nextZone);
     const zoneColor = extractZoneColor(foundZone.zone_name);
+    
+    // Интерполируем expected_value пропорционально
+    const avgEV = Number(foundZone.metrics.avg_expected_value);
+    const expectedValue = (price - state.order.price_start_local) * (interpolatedProb / 100);
+    
     return {
       price,
-      probability: Number(foundZone.metrics.avg_normalized_probability_percent),
-      expected_value: Number(foundZone.metrics.avg_expected_value),
+      probability: interpolatedProb,
+      expected_value: Math.max(0, expectedValue),
       zone: zoneColor,
     };
   }
   
-  // Если цена вне всех зон (красная зона) - используем низкую вероятность
+  // Если цена вне всех зон (красная зона) - используем низкую вероятность с градиентом
   if (state.data.zones && state.data.zones.length > 0) {
     const lastZone = state.data.zones[state.data.zones.length - 1];
     if (price > lastZone.price_range.max) {
+      // Чем дальше от последней зоны, тем меньше шанс
+      const distanceFromZone = price - lastZone.price_range.max;
+      const maxDistance = state.priceMax - lastZone.price_range.max;
+      const probabilityDecay = Math.max(0, 10 - (distanceFromZone / maxDistance) * 8); // от 10% до 2%
+      
       return {
         price,
-        probability: 10, // 10% для красной зоны
-        expected_value: price * 0.1,
+        probability: probabilityDecay,
+        expected_value: price * (probabilityDecay / 100),
+        zone: "red",
+      };
+    }
+    
+    // Если цена меньше первой зоны
+    const firstZone = state.data.zones[0];
+    if (price < firstZone.price_range.min) {
+      const distanceFromZone = firstZone.price_range.min - price;
+      const maxDistance = firstZone.price_range.min - state.priceMin;
+      const probabilityDecay = Math.max(0, 10 - (distanceFromZone / maxDistance) * 8);
+      
+      return {
+        price,
+        probability: probabilityDecay,
+        expected_value: price * (probabilityDecay / 100),
         zone: "red",
       };
     }
@@ -718,25 +778,9 @@ async function acceptCurrentPrice() {
       return;
     }
     
-    // Находим зону для текущей цены
-    let currentZone = null;
-    if (state.data.zones) {
-      for (const zone of state.data.zones) {
-        if (currentPrice >= zone.price_range.min && currentPrice <= zone.price_range.max) {
-          currentZone = zone;
-          break;
-        }
-      }
-    }
-    
-    // Используем avg_normalized_probability_percent для определения шанса
-    let chance = 0;
-    if (currentZone) {
-      chance = Number(currentZone.metrics.avg_normalized_probability_percent) / 100;
-    } else {
-      // Если вне зон (красная зона) - низкий шанс
-      chance = 0.1; // 10% для красной зоны
-    }
+    // Получаем интерполированные данные для текущей цены
+    const priceData = getPriceData(currentPrice);
+    const chance = Number(priceData.probability) / 100;
     
     const roll = Math.random();
     const accepted = roll <= chance;
@@ -746,16 +790,25 @@ async function acceptCurrentPrice() {
     const originalText = acceptButton.textContent;
     const originalColor = acceptButton.style.backgroundColor;
     
-    const zoneName = currentZone ? currentZone.zone_name : "red_zone";
+    // Находим название зоны для лога
+    let zoneName = "red_zone";
+    if (state.data.zones) {
+      for (const zone of state.data.zones) {
+        if (currentPrice >= zone.price_range.min && currentPrice <= zone.price_range.max) {
+          zoneName = zone.zone_name;
+          break;
+        }
+      }
+    }
     
     if (accepted) {
       acceptButton.textContent = "✓ Клиент ПРИНЯЛ!";
       acceptButton.style.backgroundColor = "var(--drivee-green)";
-      logAction(`Virtual client ACCEPTED ${currentPrice}₽ (zone: ${zoneName}, norm_prob: ${(chance * 100).toFixed(1)}%, roll: ${(roll * 100).toFixed(1)}%)`);
+      logAction(`Virtual client ACCEPTED ${currentPrice}₽ (zone: ${zoneName}, prob: ${(chance * 100).toFixed(1)}%, roll: ${(roll * 100).toFixed(1)}%)`);
     } else {
       acceptButton.textContent = "✗ Клиент ОТКЛОНИЛ";
       acceptButton.style.backgroundColor = "var(--danger-color)";
-      logAction(`Virtual client REJECTED ${currentPrice}₽ (zone: ${zoneName}, norm_prob: ${(chance * 100).toFixed(1)}%, roll: ${(roll * 100).toFixed(1)}%)`);
+      logAction(`Virtual client REJECTED ${currentPrice}₽ (zone: ${zoneName}, prob: ${(chance * 100).toFixed(1)}%, roll: ${(roll * 100).toFixed(1)}%)`);
     }
     
     // Возвращаем кнопку к нормальному виду через 2 секунды
