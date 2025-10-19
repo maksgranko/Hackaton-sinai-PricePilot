@@ -1,3 +1,11 @@
+import sys
+import io
+
+# Настройка кодировки для Windows консоли
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split, StratifiedKFold
@@ -40,6 +48,15 @@ def calculate_user_history_features(df):
     Returns:
         DataFrame с признаками истории для каждого user_id
     """
+    # Проверяем, есть ли is_done и есть ли разнообразие в данных
+    if 'is_done' not in df.columns or df['is_done'].nunique() <= 1:
+        # Нет is_done или все значения одинаковые - возвращаем пустой DataFrame
+        # Признаки будут заполнены дефолтами в build_enhanced_features
+        return pd.DataFrame(columns=['user_id', 'user_order_count', 'user_done_count',
+                                    'user_avg_bid', 'user_avg_start_price',
+                                    'user_acceptance_rate', 'user_avg_price_ratio',
+                                    'user_is_new', 'user_is_vip', 'user_is_price_sensitive'])
+    
     user_stats = df.groupby('user_id').agg({
         'is_done': ['count', lambda x: (x == 'done').sum()],  # Всего заказов и принятых
         'price_bid_local': 'mean',  # Средняя цена ставки
@@ -72,6 +89,15 @@ def calculate_driver_history_features(df):
     Returns:
         DataFrame с признаками истории для каждого driver_id
     """
+    # Проверяем, есть ли is_done и есть ли разнообразие в данных
+    if 'is_done' not in df.columns or df['is_done'].nunique() <= 1:
+        # Нет is_done или все значения одинаковые - возвращаем пустой DataFrame
+        # Признаки будут заполнены дефолтами в build_enhanced_features
+        return pd.DataFrame(columns=['driver_id', 'driver_bid_count', 'driver_done_count',
+                                    'driver_avg_bid', 'driver_avg_start_price',
+                                    'driver_acceptance_rate', 'driver_avg_bid_ratio',
+                                    'driver_is_active', 'driver_is_aggressive', 'driver_is_flexible'])
+    
     driver_stats = df.groupby('driver_id').agg({
         'is_done': ['count', lambda x: (x == 'done').sum()],  # Всего ставок и принятых
         'price_bid_local': 'mean',  # Средняя ставка
@@ -94,7 +120,20 @@ def calculate_driver_history_features(df):
     
     return driver_stats
 
-def clean_and_validate_data(df, verbose=True, keep_only_done=False):
+def clean_and_validate_data(df, verbose=True, keep_only_done=False, soft_cleaning=True):
+    """
+    Очищает и валидирует данные.
+    
+    Args:
+        df: DataFrame с данными
+        verbose: Выводить ли подробную информацию
+        keep_only_done: Оставлять только принятые биды (done)
+        soft_cleaning: Если True, удаляет только критичные ошибки (нули, дубликаты),
+                       остальные аномалии остаются как признаки качества
+    
+    Returns:
+        Очищенный DataFrame
+    """
     initial_count = len(df)
     
     if verbose:
@@ -106,6 +145,11 @@ def clean_and_validate_data(df, verbose=True, keep_only_done=False):
             print("Режим: Только принятые биды (done)")
         else:
             print("Режим: Все биды (done + cancel) для обучения на конкуренции")
+        if soft_cleaning:
+            print("Режим очистки: МЯГКАЯ (удаляем только критичные ошибки)")
+            print("              Аномалии остаются как признаки качества для модели")
+        else:
+            print("Режим очистки: СТРОГАЯ (удаляем все аномалии)")
         print()
     
     df['order_timestamp'] = pd.to_datetime(df['order_timestamp'], errors='coerce')
@@ -121,41 +165,50 @@ def clean_and_validate_data(df, verbose=True, keep_only_done=False):
     df['pickup_ratio'] = df['pickup_ratio'].replace([np.inf, -np.inf], np.nan)
     df['price_increase_pct'] = ((df['price_bid_local'] - df['price_start_local']) / df['price_start_local'] * 100)
     
-    problems = {}
+    # Разделяем проблемы на КРИТИЧНЫЕ и НЕКРИТИЧНЫЕ
+    critical_problems = {}  # В МЯГКОМ режиме - только дубликаты, в СТРОГОМ - все
+    non_critical_problems = {}  # Эти оставляем как признаки качества
     
-    problems['future_driver'] = (df['driver_reg_date'] > df['order_timestamp'])
-    problems['future_bid'] = (df['tender_timestamp'] < df['order_timestamp'])
-    problems['slow_response'] = (df['response_time_seconds'] > 300)
-    
-    problems['zero_distance'] = (df['distance_in_meters'] <= 0)
-    problems['zero_duration'] = (df['duration_in_seconds'] <= 0)
-    problems['zero_price'] = (df['price_bid_local'] <= 0)
-    
-    problems['too_short_trip'] = (df['distance_in_meters'] < 500)
-    problems['too_quick_trip'] = (df['duration_in_seconds'] < 60)
-    
-    problems['extreme_distance'] = (df['distance_in_meters'] > 100000)
-    problems['extreme_duration'] = (df['duration_in_seconds'] > 7200)
-    
-    problems['too_fast_city'] = (df['avg_speed_kmh'].notna()) & (df['avg_speed_kmh'] > 80)
-    min_possible_duration = df['distance_in_meters'] / (120 / 3.6)
-    problems['physically_impossible'] = (df['duration_in_seconds'] < min_possible_duration)
-    problems['too_slow'] = (df['avg_speed_kmh'].notna()) & (df['avg_speed_kmh'] < 8)
-    
-    problems['extreme_pickup_ratio'] = (df['pickup_ratio'].notna()) & (df['pickup_ratio'] > 5)
-    problems['extreme_pickup_speed'] = (df['pickup_speed_kmh'].notna()) & (df['pickup_speed_kmh'] > 100)
-    
-    problems['extreme_markup'] = (df['price_increase_pct'] > 100)
-    problems['extreme_price'] = (df['price_bid_local'] > 5000)
-    
+    # В мягком режиме удаляем ТОЛЬКО дубликаты и not_accepted (если указано)
+    # Все остальное (даже нули) остается как признаки для ML!
     duplicate_mask = df.duplicated(subset=[
         'order_id', 'driver_id', 'price_bid_local', 
         'pickup_in_meters', 'tender_timestamp'
     ], keep='first')
-    problems['exact_duplicate'] = duplicate_mask
+    critical_problems['exact_duplicate'] = duplicate_mask
     
     if keep_only_done:
-        problems['not_accepted'] = (df['is_done'] != 'done')
+        critical_problems['not_accepted'] = (df['is_done'] != 'done')
+    
+    # Эти проблемы теперь НЕКРИТИЧНЫЕ - они остаются в мягком режиме как признаки!
+    non_critical_problems['zero_distance'] = (df['distance_in_meters'] <= 0)
+    non_critical_problems['zero_duration'] = (df['duration_in_seconds'] <= 0)
+    non_critical_problems['zero_price'] = (df['price_bid_local'] <= 0)
+    
+    # НЕКРИТИЧНЫЕ ПРОБЛЕМЫ (аномалии, которые могут быть полезны для модели)
+    non_critical_problems['future_driver'] = (df['driver_reg_date'] > df['order_timestamp'])
+    non_critical_problems['future_bid'] = (df['tender_timestamp'] < df['order_timestamp'])
+    non_critical_problems['slow_response'] = (df['response_time_seconds'] > 300)
+    
+    non_critical_problems['too_short_trip'] = (df['distance_in_meters'] < 500)
+    non_critical_problems['too_quick_trip'] = (df['duration_in_seconds'] < 60)
+    
+    non_critical_problems['extreme_distance'] = (df['distance_in_meters'] > 100000)
+    non_critical_problems['extreme_duration'] = (df['duration_in_seconds'] > 7200)
+    
+    non_critical_problems['too_fast_city'] = (df['avg_speed_kmh'].notna()) & (df['avg_speed_kmh'] > 80)
+    min_possible_duration = df['distance_in_meters'] / (120 / 3.6)
+    non_critical_problems['physically_impossible'] = (df['duration_in_seconds'] < min_possible_duration)
+    non_critical_problems['too_slow'] = (df['avg_speed_kmh'].notna()) & (df['avg_speed_kmh'] < 8)
+    
+    non_critical_problems['extreme_pickup_ratio'] = (df['pickup_ratio'].notna()) & (df['pickup_ratio'] > 5)
+    non_critical_problems['extreme_pickup_speed'] = (df['pickup_speed_kmh'].notna()) & (df['pickup_speed_kmh'] > 100)
+    
+    non_critical_problems['extreme_markup'] = (df['price_increase_pct'] > 100)
+    non_critical_problems['extreme_price'] = (df['price_bid_local'] > 5000)
+    
+    # Объединяем для вывода статистики
+    problems = {**critical_problems, **non_critical_problems}
     
     if verbose:
         descriptions = {
@@ -180,18 +233,48 @@ def clean_and_validate_data(df, verbose=True, keep_only_done=False):
             'not_accepted': 'Отклонённый бид (is_done=cancel)'
         }
         
-        print(f"{'Проблема':<50s} {'Записей':>10s}")
+        # Выводим критичные проблемы
+        if soft_cleaning:
+            print(f"{'УДАЛЯЕМ ТОЛЬКО ДУБЛИКАТЫ (мягкий режим):':<50s}")
+        else:
+            print(f"{'УДАЛЯЕМ ВСЕ ПРОБЛЕМЫ (строгий режим):':<50s}")
         print("-"*62)
-        
-        for name, mask in problems.items():
+        critical_count = 0
+        for name, mask in critical_problems.items():
             count = mask.sum()
             if count > 0:
                 desc = descriptions.get(name, name)
                 print(f"{desc:<50s} {count:>10d}")
+                critical_count += count
+        
+        if soft_cleaning:
+            print(f"\n{'ПОМЕЧАЕМ КАК МУСОР (остаются для ML как признаки):':<50s}")
+        else:
+            print(f"\n{'УДАЛЯЕМ В СТРОГОМ РЕЖИМЕ:':<50s}")
+        print("-"*62)
+        
+        for name, mask in non_critical_problems.items():
+            count = mask.sum()
+            if count > 0:
+                desc = descriptions.get(name, name)
+                if soft_cleaning:
+                    status = "→ помечено как мусор"
+                else:
+                    status = "→ удалено"
+                print(f"{desc:<40s} {count:>10d}  {status}")
     
+    # Формируем маску удаления
     delete_mask = pd.Series(False, index=df.index)
-    for mask in problems.values():
+    
+    # В МЯГКОМ режиме удаляем ТОЛЬКО дубликаты (все остальное - признаки для ML)
+    # В СТРОГОМ режиме удаляем ВСЁ
+    for mask in critical_problems.values():
         delete_mask |= mask
+    
+    # В строгом режиме также удаляем некритичные проблемы
+    if not soft_cleaning:
+        for mask in non_critical_problems.values():
+            delete_mask |= mask
     
     df_clean = df[~delete_mask].copy()
     
@@ -220,6 +303,108 @@ def clean_and_validate_data(df, verbose=True, keep_only_done=False):
         print("="*70)
     
     return df_clean
+
+def calculate_data_quality_features(df):
+    """
+    Создает признаки качества данных на основе проверок валидации.
+    Помогает модели распознавать потенциально проблемные записи.
+    
+    ВАЖНО: Ничего не удаляется! Все аномалии помечаются как признаки для ML.
+    
+    Args:
+        df: DataFrame с данными заказов
+    
+    Returns:
+        DataFrame с признаками качества
+    """
+    quality_features = pd.DataFrame(index=df.index)
+    
+    # Временные метки
+    order_ts = pd.to_datetime(df['order_timestamp'], errors='coerce')
+    tender_ts = pd.to_datetime(df['tender_timestamp'], errors='coerce')
+    driver_reg = pd.to_datetime(df['driver_reg_date'], errors='coerce')
+    
+    # Безопасный расчёт производных величин
+    response_time = (tender_ts - order_ts).dt.total_seconds()
+    response_time = response_time.fillna(30)
+    
+    avg_speed = (df['distance_in_meters'] / (df['duration_in_seconds'] + 0.1) * 3.6)
+    avg_speed = avg_speed.replace([np.inf, -np.inf], np.nan).fillna(30)
+    
+    pickup_speed = (df['pickup_in_meters'] / (df['pickup_in_seconds'] + 0.1) * 3.6)
+    pickup_speed = pickup_speed.replace([np.inf, -np.inf], np.nan).fillna(30)
+    
+    pickup_ratio = df['pickup_in_meters'] / (df['distance_in_meters'] + 0.1)
+    pickup_ratio = pickup_ratio.replace([np.inf, -np.inf], np.nan).fillna(0.5)
+    
+    price_increase_pct = ((df['price_bid_local'] - df['price_start_local']) / (df['price_start_local'] + 0.1) * 100)
+    price_increase_pct = price_increase_pct.replace([np.inf, -np.inf], np.nan).fillna(0)
+    
+    # 🚩 ВРЕМЕННЫЕ АНОМАЛИИ
+    quality_features['flag_future_driver'] = (driver_reg > order_ts).fillna(False).astype(float)
+    quality_features['flag_future_bid'] = (tender_ts < order_ts).fillna(False).astype(float)
+    quality_features['flag_slow_response'] = (response_time > 300).astype(float)
+    quality_features['response_time_score'] = np.clip(response_time / 300, 0, 2)
+    
+    # 🚩 НУЛЕВЫЕ/ОТРИЦАТЕЛЬНЫЕ ЗНАЧЕНИЯ (КРИТИЧНЫЙ МУСОР)
+    quality_features['flag_zero_distance'] = (df['distance_in_meters'] <= 0).astype(float)
+    quality_features['flag_zero_duration'] = (df['duration_in_seconds'] <= 0).astype(float)
+    quality_features['flag_zero_price'] = (df['price_bid_local'] <= 0).astype(float)
+    quality_features['zero_values_count'] = (
+        quality_features['flag_zero_distance'] + 
+        quality_features['flag_zero_duration'] + 
+        quality_features['flag_zero_price']
+    )
+    
+    # 🚩 СЛИШКОМ КОРОТКИЕ ПОЕЗДКИ
+    quality_features['flag_too_short_trip'] = (df['distance_in_meters'] < 500).astype(float)
+    quality_features['flag_too_quick_trip'] = (df['duration_in_seconds'] < 60).astype(float)
+    quality_features['short_trip_score'] = np.clip(df['distance_in_meters'] / 500, 0, 2)
+    
+    # 🚩 ЭКСТРЕМАЛЬНО ДЛИННЫЕ ПОЕЗДКИ
+    quality_features['flag_extreme_distance'] = (df['distance_in_meters'] > 100000).astype(float)
+    quality_features['flag_extreme_duration'] = (df['duration_in_seconds'] > 7200).astype(float)
+    quality_features['distance_extremity'] = df['distance_in_meters'] / 100000
+    quality_features['duration_extremity'] = df['duration_in_seconds'] / 7200
+    
+    # 🚩 АНОМАЛИИ СКОРОСТИ
+    quality_features['flag_too_fast_city'] = (avg_speed > 80).astype(float)
+    min_possible_duration = df['distance_in_meters'] / (120 / 3.6)
+    quality_features['flag_physically_impossible'] = (df['duration_in_seconds'] < min_possible_duration).fillna(False).astype(float)
+    quality_features['flag_too_slow'] = (avg_speed < 8).astype(float)
+    quality_features['speed_anomaly_score'] = np.clip(
+        np.maximum(avg_speed / 80, 8 / (avg_speed + 0.1)), 0, 5
+    )
+    
+    # 🚩 АНОМАЛИИ ПОДАЧИ
+    quality_features['flag_extreme_pickup_ratio'] = (pickup_ratio > 5).astype(float)
+    quality_features['flag_extreme_pickup_speed'] = (pickup_speed > 100).astype(float)
+    quality_features['pickup_anomaly_score'] = np.clip(pickup_ratio / 5, 0, 3)
+    
+    # 🚩 АНОМАЛИИ ЦЕН
+    quality_features['flag_extreme_markup'] = (price_increase_pct > 100).astype(float)
+    quality_features['flag_extreme_price'] = (df['price_bid_local'] > 5000).astype(float)
+    quality_features['price_anomaly_score'] = np.clip(
+        np.maximum(price_increase_pct / 100, df['price_bid_local'] / 5000), 0, 3
+    )
+    
+    # 🚩 ОБЩИЙ ИНДЕКС КАЧЕСТВА ДАННЫХ
+    flag_columns = [col for col in quality_features.columns if col.startswith('flag_')]
+    quality_features['total_flags'] = quality_features[flag_columns].sum(axis=1)
+    
+    # Инвертированный индекс качества: 1.0 = отличное, 0.0 = много проблем
+    quality_features['data_quality_index'] = 1.0 / (1.0 + quality_features['total_flags'])
+    
+    # Категории качества
+    quality_features['is_high_quality'] = (quality_features['total_flags'] == 0).astype(float)
+    quality_features['is_suspicious'] = (quality_features['total_flags'] >= 2).astype(float)
+    quality_features['is_low_quality'] = (quality_features['total_flags'] >= 4).astype(float)
+    
+    # Заполняем NaN и Inf (на всякий случай)
+    quality_features = quality_features.replace([np.inf, -np.inf], np.nan)
+    quality_features = quality_features.fillna(0)
+    
+    return quality_features
 
 def detect_taxi_type(carname, carmodel):
     carname = str(carname).strip()
@@ -269,6 +454,9 @@ def build_enhanced_features(frame):
     # Объединяем с основными данными
     frame = frame.merge(user_history, on='user_id', how='left')
     frame = frame.merge(driver_history, on='driver_id', how='left')
+    
+    # 🔍 НОВЫЕ ПРИЗНАКИ: Качество данных (аномалии и мусор)
+    quality_features = calculate_data_quality_features(frame)
     
     # Заполняем пропуски для новых пользователей/водителей
     frame['user_order_count'] = frame['user_order_count'].fillna(1)
@@ -467,6 +655,11 @@ def build_enhanced_features(frame):
     features['is_month_end'] = (day_of_month >= 25).astype(float).values  # Конец месяца (деньги кончаются)
     features['hour_quartile'] = (hour // 6).astype(float).values  # 0: 0-6, 1: 6-12, 2: 12-18, 3: 18-24
     
+    # 🔍 ПРИЗНАКИ КАЧЕСТВА ДАННЫХ
+    # Добавляем все признаки качества из quality_features
+    for col in quality_features.columns:
+        features[col] = quality_features[col].values
+    
     result = pd.DataFrame(features)
     
     result = result.replace([np.inf, -np.inf], np.nan)
@@ -491,7 +684,20 @@ def build_enhanced_features(frame):
     
     return result
 
-def train_model(train_path="simple-train.csv", use_gpu=False, test_size=0.2, random_state=42):
+def train_model(train_path="simple-train.csv", use_gpu=False, test_size=0.2, random_state=42, soft_cleaning=True):
+    """
+    Обучает модель предсказания принятия ставки.
+    
+    Args:
+        train_path: путь к файлу с обучающими данными
+        use_gpu: использовать ли GPU для обучения
+        test_size: доля тестовой выборки
+        random_state: random seed для воспроизводимости
+        soft_cleaning: использовать мягкую очистку (оставлять аномалии как признаки)
+    
+    Returns:
+        Кортеж (модель, важность признаков)
+    """
     print("\n" + "="*70)
     print("ОБУЧЕНИЕ ML-МОДЕЛИ DRIVEE")
     print("="*70)
@@ -503,7 +709,8 @@ def train_model(train_path="simple-train.csv", use_gpu=False, test_size=0.2, ran
     df = clean_and_validate_data(
         df, 
         verbose=True,
-        keep_only_done=False
+        keep_only_done=False,
+        soft_cleaning=soft_cleaning
     )
     
     if len(df) < 100:
