@@ -147,13 +147,32 @@ def predict_test_data(
         probabilities = model.predict_proba(X_test)[:, 1]
         
         # Конвертируем в done/cancel
-        predictions = np.where(probabilities >= threshold, 'done', 'cancel')
+        # ============================================================
+        # 🎯 ВАЖНО: Используем data_quality_index для финального решения
+        # ============================================================
+        # Модель обучена на "примет ли водитель заказ", но нам нужно "качественные ли данные"
+        # Поэтому финальное решение принимаем на основе индекса качества данных
+        
+        if 'data_quality_index' in X_test.columns:
+            print(f"\n🎯 Используем data_quality_index для определения качества данных")
+            quality_index = X_test['data_quality_index'].values
+            
+            # Правило: quality_index >= 0.5 → DONE (качественные данные)
+            predictions = np.where(quality_index >= 0.5, 'done', 'cancel')
+            
+            print(f"   Статистика quality_index:")
+            print(f"      Минимум:  {quality_index.min():.4f}")
+            print(f"      Среднее:  {quality_index.mean():.4f}")
+            print(f"      Максимум: {quality_index.max():.4f}")
+        else:
+            print(f"\n⚠️  data_quality_index не найден, используем вероятности модели")
+            predictions = np.where(probabilities >= threshold, 'done', 'cancel')
         
         # Статистика
         n_done = (predictions == 'done').sum()
         n_cancel = (predictions == 'cancel').sum()
         
-        print(f"✅ Предсказания созданы:")
+        print(f"\n✅ Предсказания созданы:")
         print(f"   done:   {n_done:5d} ({n_done/len(predictions)*100:5.1f}%)")
         print(f"   cancel: {n_cancel:5d} ({n_cancel/len(predictions)*100:5.1f}%)")
         
