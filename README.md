@@ -18,7 +18,7 @@
 
 ```bash
 # 1. Загрузите корректную копию репозитория
-https://github.com/maksgranko/Hackaton-sinai-PricePilot/archive/3435de4380d91a267afc86c13b0e876e666136e0.zip
+https://github.com/maksgranko/Hackaton-sinai-PricePilot/archive/refs/heads/Released.zip
 
 # 2. Создайте виртуальное окружение
 python -m venv .venv
@@ -207,10 +207,10 @@ curl -X POST "http://127.0.0.1:8000/auth/token" \
 
 ## 🔗 Рекомендуемая версия
 
-Рабочий коммит с продемонстрированным интерфейсом:
+Рабочая ветка с продемонстрированным интерфейсом:
 
 ```
-https://github.com/maksgranko/Hackaton-sinai-PricePilot/commit/e66f957ef220403f4f87ed40660313fc38daaf98
+https://github.com/maksgranko/Hackaton-sinai-PricePilot/tree/Released
 ```
 
 ---
