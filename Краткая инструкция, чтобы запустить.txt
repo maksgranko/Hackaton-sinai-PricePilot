@@ -1,0 +1,40 @@
+Краткая инструкция, чтобы запустить всё корректно:
+1. Убедитесь в наличии simple-train.csv
+В КОРНЕ проекта, это, вероятно, train.csv, просто переименованный, это просто файл, который скармливается для обучения.
+Они на деле никак не отличаются.
+2. Запускаем ИЗ КОРНЯ!
+# Для обучения ML и получения 4х joblib: driver_history.joblib | feature_names.joblib | model_enhanced.joblib | user_history.joblib
+# Их может быть меньше, например, если кэш не используется! Вроде-как был 18.10 вечером, как минимум, опциональный.
+python ./src/build_history_cache.py
+python ./main.py
+# Для старта WebUI, к нему подвязано по API 
+uvicorn app.main:app --reload
+
+3. В целом всё, но стоит учесть:
+Левое бургер-меню/букашка отвечает за тестирование.
+Можно туда вписать следующую информацию:
+```{
+  "order_timestamp": 1718558240,
+  "distance_in_meters": 3404,
+  "duration_in_seconds": 486,
+  "pickup_in_meters": 790,
+  "pickup_in_seconds": 169,
+  "driver_rating": 5.0,
+  "platform": "android",
+  "price_start_local": 180.0,
+  "carname": "LADA",
+  "carmodel": "GRANTA",
+  "driver_reg_date": "2020-01-15",
+  "user_id": 12345,
+  "driver_id": 67890
+}```
+По умолчанию, там уже присутствует основа, но если нужно засунуть свои данные - можно использовать данную форму.
+В теории, отсутствие user_id и driver_id допустимо, возможно даже carmodel и carname
+
+4. Всё. Дальше кратко, что за что отвечает:
+
+Структура:
+Вся магия ML происходит в src.
+к Web-части относятся app, webui, scripts
+main.py в корне относится к ML
+test_price_recommendation.py вероятно, deprecated, не тестировано, но использовалось на ранних версиях тестирования ML

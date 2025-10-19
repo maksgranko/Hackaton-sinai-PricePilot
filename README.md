@@ -68,6 +68,8 @@ python ./main.py
 
 ### Шаг 3: Запуск веб-интерфейса
 
+ПЕРЕД ЭТИМ ПЕРЕИМЕНУЙТЕ ВСЕ МОДЕЛИ:
+.joblib1 в .joblib
 ```bash
 # Запуск FastAPI сервера с автоперезагрузкой
 uvicorn app.main:app --reload
