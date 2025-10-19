@@ -1,26 +1,188 @@
-# FastAPI Pricing Backend Skeleton
+# 🚕 PricePilot - Интеллектуальная система рекомендации цен для такси
 
-Backend skeleton that accepts ride order parameters from the frontend, forwards them to an (as yet unimplemented) ML pricing model, and returns the calculated price recommendations. The ML integration is stubbed out so the service can be wired up and iterated on before the model goes live.
+## 🎯 Краткий тизер
 
-## Prerequisites
+**PricePilot** — интеллектуальная ML-система динамического ценообразования для такси-агрегаторов, которая анализирует исторические данные о заказах, поведение пользователей и водителей, используя машинное обучение (XGBoost + калибровка вероятностей) для предсказания оптимальной цены, максимизирующей вероятность принятия заказа. Система решает задачу бинарной классификации, строя кривую вероятности по всему диапазону цен и находя точку максимальной ожидаемой выгоды с учетом экономики топлива, временных паттернов и персонализации для всех участников рынка такси.
+
+---
+
+## 🚀 Быстрый старт
+
+### Требования
 
 - Python 3.10+
-- `pip` (or another dependency manager)
+- 4 GB RAM минимум
+- CSV файл с историческими данными (`simple-train.csv`) (если не приложены файлы ML)
 
-## Getting Started
+### Установка
 
 ```bash
+# 1. Загрузите корректную копию репозитория
+https://github.com/maksgranko/Hackaton-sinai-PricePilot/archive/3435de4380d91a267afc86c13b0e876e666136e0.zip
+
+# 2. Создайте виртуальное окружение
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
+# ! Можно и без виртуального окружения, но в таком случае, в системе могут быть конфликты, ошибки !
+# 3. Установите зависимости
 pip install -r requirements.txt
+```
+
+---
+
+## 📝 Пошаговая инструкция по запуску
+
+### Шаг 1: Подготовка данных
+
+Убедитесь, что в **корне проекта** находится файл `simple-train.csv`. Это может быть `train.csv`, просто переименованный — это файл с историческими данными для обучения модели.
+
+```bash
+# Если у вас train.csv, переименуйте его
+mv train.csv simple-train.csv  # Linux/Mac
+# или
+ren train.csv simple-train.csv  # Windows
+```
+
+### Шаг 2: Обучение модели и создание кэша
+
+**Важно:** Все команды выполняются **из корня проекта**!
+
+```bash
+# Построение кэша истории пользователей и водителей
+# Создает: user_history.joblib, driver_history.joblib (опционально)
+python ./src/build_history_cache.py
+
+# Обучение ML-модели
+# Создает: model_enhanced.joblib, feature_names.joblib
+python ./main.py
+```
+
+После выполнения должны появиться файлы:
+
+- `driver_history.joblib` (опционально)
+- `feature_names.joblib`
+- `model_enhanced.joblib`
+- `user_history.joblib` (опционально)
+
+> **Примечание:** Количество `.joblib` файлов может варьироваться в зависимости от конфигурации. Кэш истории (`user_history.joblib`, `driver_history.joblib`) опционален и может отсутствовать.
+
+### Шаг 3: Запуск веб-интерфейса
+
+```bash
+# Запуск FastAPI сервера с автоперезагрузкой
 uvicorn app.main:app --reload
 ```
 
-The API will be available on `http://127.0.0.1:8000`. You can use the interactive docs at `/docs` or `/redoc`.
+Откройте браузер и перейдите на `http://127.0.0.1:8000`
 
-## Authentication
+### Шаг 4: Тестирование через интерфейс
 
-All application endpoints are protected with bearer tokens issued via `/auth/token`. A demo account is provided for local development and can be overridden with environment variables (`TEST_USER_EMAIL`, `TEST_USER_PASSWORD`).
+В веб-интерфейсе доступно **левое бургер-меню** (иконка ☰) для тестирования API.
+
+**Пример тестовых данных:**
+
+```json
+{
+  "order_timestamp": 1718558240,
+  "distance_in_meters": 3404,
+  "duration_in_seconds": 486,
+  "pickup_in_meters": 790,
+  "pickup_in_seconds": 169,
+  "driver_rating": 5.0,
+  "platform": "android",
+  "price_start_local": 180.0,
+  "carname": "LADA",
+  "carmodel": "GRANTA",
+  "driver_reg_date": "2020-01-15",
+  "user_id": 12345,
+  "driver_id": 67890
+}
+```
+
+**Опциональные поля:**
+
+- `user_id`, `driver_id` - для персонализации (используется кэш)
+- `carname`, `carmodel` - для определения класса такси
+- По умолчанию в форме уже присутствуют базовые значения
+
+---
+
+## 📁 Структура проекта
+
+```
+Hackaton-sinai-PricePilot/
+├── src/                     # ML-магия (обучение, предсказания)
+│   ├── train_model.py       # обучение модели
+│   ├── recommend_price.py   # рекомендация цен
+│   └── build_history_cache.py  # построение кэша
+├── app/                     # Web API (FastAPI)
+│   ├── main.py              # главный эндпоинт
+│   ├── services.py          # бизнес-логика
+│   ├── schemas.py           # Pydantic схемы
+│   ├── auth.py              # JWT аутентификация
+│   └── config.py            # конфигурация
+├── webui/                   # Веб-интерфейс
+│   ├── templates/           # HTML шаблоны
+│   └── static/              # CSS, JS, изображения
+├── scripts/                 # Утилиты
+│   └── mock_frontend.py     # тестовый клиент
+├── main.py                  # ML-обучение (корень)
+├── test_price_recommendation.py  # deprecated тесты
+└── simple-train.csv         # данные для обучения
+```
+
+---
+
+## 🐳 Docker развертывание
+
+```bash
+# Сборка и запуск
+docker-compose up --build
+
+# В фоновом режиме
+docker-compose up -d
+```
+
+API будет доступен на `http://localhost:8000`
+
+---
+
+## 🧠 Архитектура ML-модели
+
+### Ключевые возможности
+
+✅ **Персонализация**: Учитывает историю заказов пользователя и ставок водителя  
+✅ **Экономика топлива**: Расчет рентабельности с учетом расхода топлива  
+✅ **Зоны ценообразования**: Разделение цен на 4 зоны (красная, желтая, зеленая)  
+✅ **Временные паттерны**: Учет времени суток, дня недели, пиковых часов  
+✅ **Калибровка вероятностей**: Точные предсказания с помощью CalibratedClassifierCV  
+
+### Алгоритм
+
+**XGBoost Classifier** (200 деревьев) + **Calibrated Classifier** (Sigmoid калибровка)
+
+- **99 признаков** из 16 категорий
+- **ROC-AUC**: ~0.75-0.85
+- **Время предсказания**: ~4 секунды на запрос
+
+### Основные категории признаков
+
+- Ценовые признаки (7)
+- Временные признаки (15)
+- Признаки маршрута (12)
+- Признаки подачи (7)
+- Экономика топлива (12)
+- История пользователя (6)
+- История водителя (6)
+- И другие...
+
+---
+
+## 📡 API документация
+
+### Аутентификация
+
+**Получение токена:**
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/auth/token" \
@@ -28,74 +190,59 @@ curl -X POST "http://127.0.0.1:8000/auth/token" \
      -d "username=demo@example.com&password=demo"
 ```
 
-The response contains an `access_token`. Send it as `Authorization: Bearer <token>` when calling the pricing endpoint.
+**Демо-учетка:**
 
-## Web UI
+- Email: `demo@example.com`
+- Пароль: `demo`
 
-The driver-facing screen is bundled with the backend and served from the root path once the server is running. Open `http://127.0.0.1:8000` to access the interface; static assets live under `/assets/*`.
+### Основные эндпоинты
 
-You can tweak behaviour with environment variables before starting the app:
+- **GET** `/` - веб-интерфейс для водителей
+- **POST** `/auth/token` - JWT аутентификация
+- **POST** `/api/v1/orders/price-recommendation` - рекомендация цены
+- **GET** `/health` - проверка статуса
+- **GET** `/docs` - Swagger UI документация
 
-- `WEBUI_BACKEND_BASE` – override the base URL used by the browser (default: same origin)
-- `WEBUI_TOKEN_PATH` / `WEBUI_PRICING_PATH` – override endpoint paths if they change
-- `WEBUI_USERNAME` / `WEBUI_PASSWORD` – demo credentials for the automatic login
-- `WEBUI_INCLUDE_CREDENTIALS` – set to `true` when the API relies on cookie-based auth
+---
 
-If you expose the UI from a different origin, remember to allow it via `BACKEND_ALLOW_ORIGINS`, e.g. `BACKEND_ALLOW_ORIGINS="http://127.0.0.1:3000"`.
+## 🔗 Рекомендуемая версия
 
-Press the bug icon in the header to open the built-in debugger: set `carname`, inject raw JSON overrides, toggle lottery-mode client simulation, or refresh the JWT token without reloading the page.
+Рабочий коммит с продемонстрированным интерфейсом:
 
-## ML Integration
-
-By default the backend returns a mocked response. To plug in the bundled Python model (`src/recommend_price.py`) or your own implementation:
-
-- `PRICING_ML_MODULE` – dotted path to the module containing the entrypoint (e.g. `src.recommend_price`)
-- `PRICING_ML_CALLABLE` – callable inside that module (sync or async) that accepts `OrderRequest`/dict and returns a payload compatible with `ModelResponse` (default for bundled module: `predict`)
-- `PRICING_MODEL_PATH` – override path to the serialized model artifact (defaults to `model_enhanced.joblib`)
-- `PRICING_ML_ALLOW_STUB_FALLBACK` – set to `false` to disable fallback to the dummy payload when import/execution fails
-- `PRICING_SCAN_POINTS` – number of price points to scan when building the curve (defaults to 200)
-
-Example configuration for the bundled pipeline:
-
-```bash
-export PRICING_ML_MODULE=src.recommend_price
-export PRICING_ML_CALLABLE=predict
-export PRICING_MODEL_PATH=model_enhanced.joblib
+```
+https://github.com/maksgranko/Hackaton-sinai-PricePilot/commit/e66f957ef220403f4f87ed40660313fc38daaf98
 ```
 
-When both `PRICING_ML_MODULE` and `PRICING_ML_CALLABLE` are present the app will load and cache that callable; otherwise the stub remains active.
+---
 
-## API
+## 🛠️ Технологический стек
 
-- `POST /api/v1/orders/price-recommendation`  
-  Request body:
+**Backend & API:**  
+FastAPI, Uvicorn, PyJWT, httpx
 
-  ```json
-  {
-    "order_timestamp": 1718558240,
-    "distance_in_meters": 3404,
-    "duration_in_seconds": 486,
-    "pickup_in_meters": 790,
-    "pickup_in_seconds": 169,
-    "driver_rating": 5,
-    "platform": "android",
-    "price_start_local": 180
-  }
-  ```
+**Machine Learning:**  
+XGBoost, scikit-learn, pandas, numpy, scipy, joblib
 
-  Response mirrors the structure expected from the ML team. Currently the data is mocked with a static payload and dynamic timestamp/start price updates.
+**Frontend:**  
+Vanilla JS (ES6+), CSS3, HTML5
 
-## Mock Frontend Script
+**DevOps:**  
+Docker, docker-compose
 
-Use the helper script to simulate the frontend call once the server is running:
+---
 
-```bash
-python scripts/mock_frontend.py
-```
+## 🤝 Авторы
 
-The script requests a JWT using the demo credentials (override with `API_USERNAME` / `API_PASSWORD`) and prints the JSON response.
+- Разработано для **Hackathon**.
+- Роль: Менеджер/Аналитик — Иван Лунин.
+- Роль: Дизайнер (UX/UI) — Кирилл Опенченко.
+- Роль: Data Scientist (ML-моделирование) — Максим Гранько.
+- Роль: Backend-разработчик (API/Интеграция) — Виктор Волошко. 
+- Роль: Программист (Data Engineering) — Олег Половинко.
 
-## Replacing the Stub
+---
+Основные ссылки на Docker и GitHub:
+Docker Hub: https://hub.docker.com/r/maksgranko/pricepilot
+GitHub: https://github.com/maksgranko/Hackaton-sinai-PricePilot
 
-- Update `app/services.py` to call the real ML model (HTTP, RPC, etc.).
-- Adjust response parsing in `call_pricing_model` if the ML contract changes.
+**🚀 PricePilot** - Умное ценообразование для современного такси!
