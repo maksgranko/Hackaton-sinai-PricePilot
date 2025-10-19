@@ -17,7 +17,7 @@
 ### Установка
 
 ```bash
-# 1. Клонируйте репозиторий
+# 1. Загрузите корректную копию репозитория
 https://github.com/maksgranko/Hackaton-sinai-PricePilot/archive/3435de4380d91a267afc86c13b0e876e666136e0.zip
 
 # 2. Создайте виртуальное окружение
@@ -241,5 +241,8 @@ Docker, docker-compose
 - Роль: Программист (Data Engineering) — Олег Половинко.
 
 ---
+Основные ссылки на Docker и GitHub:
+Docker Hub: https://hub.docker.com/r/maksgranko/pricepilot
+GitHub: https://github.com/maksgranko/Hackaton-sinai-PricePilot
 
 **🚀 PricePilot** - Умное ценообразование для современного такси!
